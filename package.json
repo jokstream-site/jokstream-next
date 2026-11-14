@@ -2,10 +2,12 @@
   "name": "jokstream",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["apps/web"],
+  "workspaces": ["apps/web", "services/gateway"],
   "scripts": {
     "dev": "npm run dev --workspace @jokstream/web",
+    "dev:gateway": "npm run dev --workspace @jokstream/gateway",
     "build": "npm run build --workspace @jokstream/web",
+    "typecheck:gateway": "npm run typecheck --workspace @jokstream/gateway",
     "preview": "npm run preview --workspace @jokstream/web"
   }
 }
