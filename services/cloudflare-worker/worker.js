@@ -37,6 +37,73 @@ function isAllowedProviderTarget(target, cfg) {
   return target.protocol === "https:" && target.hostname === "burn.arshas.com" &&
     (target.port === "" || target.port === "443");
 }
+function bytesToBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+function base64UrlToBytes(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+  const binary = atob(padded);
+  return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+async function hlsCryptoKey(secret) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+async function sealHlsTarget(target, secret) {
+  const key = await hlsCryptoKey(secret);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(target));
+  const payload = new Uint8Array(iv.length + encrypted.byteLength);
+  payload.set(iv);
+  payload.set(new Uint8Array(encrypted), iv.length);
+  return bytesToBase64Url(payload);
+}
+async function openHlsTarget(token, secret) {
+  const payload = base64UrlToBytes(token);
+  if (payload.length < 29) throw new Error("Invalid HLS resource token");
+  const key = await hlsCryptoKey(secret);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: payload.slice(0, 12) }, key, payload.slice(12));
+  const target = new URL(new TextDecoder().decode(plain));
+  if (!["http:", "https:"].includes(target.protocol)) throw new Error("Unsupported HLS resource protocol");
+  return target;
+}
+async function hlsResourceUrl(target, requestUrl, secret) {
+  const token = await sealHlsTarget(target.toString(), secret);
+  return new URL("/hls/" + token, requestUrl).toString();
+}
+async function rewriteHlsManifest(body, target, requestUrl, cfg, secret) {
+  const lines = body.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const output = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) { output.push(line); continue; }
+    if (trimmed.startsWith("#")) {
+      const pattern = /(\bURI\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^,\s]+))/gi;
+      const matches = [...line.matchAll(pattern)];
+      let rewritten = line;
+      for (const match of matches) {
+        const raw = match[2] ?? match[3] ?? match[4];
+        const resolved = new URL(raw, target);
+        if (!isAllowedProviderTarget(resolved, cfg)) throw new Error("HLS manifest contains a disallowed resource URI");
+        const proxyUrl = await hlsResourceUrl(resolved, requestUrl, secret);
+        const quote = match[2] !== undefined ? '"' : match[3] !== undefined ? "'" : "";
+        rewritten = rewritten.replace(match[0], match[1] + quote + proxyUrl + quote);
+      }
+      output.push(rewritten);
+    } else {
+      const resolved = new URL(trimmed, target);
+      if (!isAllowedProviderTarget(resolved, cfg)) throw new Error("HLS manifest contains a disallowed resource URI");
+      const proxyUrl = await hlsResourceUrl(resolved, requestUrl, secret);
+      const leading = line.match(/^\s*/)?.[0] || "";
+      const trailing = line.match(/\s*$/)?.[0] || "";
+      output.push(leading + proxyUrl + trailing);
+    }
+  }
+  return output.join("\n");
+}
 async function proxyProvider(request, cfg, target, env, redirectDepth = 0) {
   if (!isAllowedProviderTarget(target, cfg)) return json({ error: "Provider target rejected" }, 403);
   const headers = new Headers({
@@ -72,23 +139,7 @@ async function proxyProvider(request, cfg, target, env, redirectDepth = 0) {
   const isManifest = /mpegurl|vnd\.apple\.mpegurl/i.test(contentType) || /\.m3u8(?:$|[?#])/i.test(target.pathname);
   if (upstream.ok && isManifest && request.method !== "HEAD") {
     const body = await upstream.text();
-    const workerOrigin = new URL(request.url).origin;
-    const assetUrl = raw => {
-      const resolved = new URL(raw, target);
-      if (!isAllowedProviderTarget(resolved, cfg)) throw new Error("HLS resource target rejected");
-      const out = new URL("/asset", workerOrigin);
-      out.searchParams.set("url", resolved.toString());
-      out.searchParams.set("token", env.JOKSTREAM_PROXY_TOKEN);
-      return out.toString();
-    };
-    const rewritten = body.split(/\r?\n/).map(line => {
-      const trimmed = line.trim();
-      if (!trimmed) return line;
-      if (trimmed.startsWith("#")) {
-        return line.replace(/URI="([^"]+)"/g, (_m, uri) => 'URI="' + assetUrl(uri) + '"');
-      }
-      return assetUrl(trimmed);
-    }).join("\n");
+    const rewritten = await rewriteHlsManifest(body, target, request.url, cfg, env.JOKSTREAM_PROXY_TOKEN);
     responseHeaders.delete("Content-Length");
     responseHeaders.set("Content-Type", "application/vnd.apple.mpegurl");
     return new Response(rewritten, { status: upstream.status, headers: responseHeaders });
@@ -198,6 +249,13 @@ export default {
       if (url.pathname.startsWith("/stream/")) {
         if (!authorized(request, env, url, true)) return json({ error: "Unauthorized" }, 401);
         return proxyProvider(request, cfg, providerStreamUrl(cfg, url.pathname), env);
+      }
+      if (url.pathname.startsWith("/hls/")) {
+        const token = url.pathname.slice("/hls/".length);
+        if (!token || token.includes("/") || token.length > 8192) return json({ error: "Invalid HLS token" }, 400);
+        const target = await openHlsTarget(token, env.JOKSTREAM_PROXY_TOKEN);
+        if (!isAllowedProviderTarget(target, cfg)) return json({ error: "HLS resource target rejected" }, 403);
+        return proxyProvider(request, cfg, target, env);
       }
       if (url.pathname === "/asset") {
         if (!authorized(request, env, url, true)) return json({ error: "Unauthorized" }, 401);
