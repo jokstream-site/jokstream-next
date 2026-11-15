@@ -85,6 +85,72 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
   next()
 }
 
+
+let discoveryCache: { expiresAt: number; payload: unknown } | null = null
+app.get('/api/discovery', async (_req, res) => {
+  if (discoveryCache && discoveryCache.expiresAt > Date.now()) {
+    res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=300')
+    return res.json(discoveryCache.payload)
+  }
+  const today = new Date()
+  const dates = [0, 1, 2].map(offset => {
+    const date = new Date(today)
+    date.setUTCDate(date.getUTCDate() + offset)
+    return date.toISOString().slice(0, 10)
+  })
+  const sports = ['football', 'basketball', 'tennis', 'cricket']
+  const requests = sports.flatMap(sport => dates.map(async date => {
+    try {
+      const url = new URL('https://sportscore.com/api/v1/fixtures/')
+      url.searchParams.set('sport', sport)
+      url.searchParams.set('date', date)
+      url.searchParams.set('status', 'upcoming')
+      url.searchParams.set('limit', '100')
+      const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'JokStream/1.0 (+https://jokstream-web.onrender.com)' }, signal: AbortSignal.timeout(12000) })
+      if (!response.ok) return []
+      const body = await response.json() as { fixtures?: any[]; matches?: any[]; data?: any[] }
+      return (body.fixtures || body.matches || body.data || []).map((row: any) => ({
+        id: String(row.id ?? row.slug ?? [sport,row.home,row.away,row.time].join('-')),
+        sport,
+        title: [row.home ?? row.home_team ?? row.participants?.[0]?.name, row.away ?? row.away_team ?? row.participants?.[1]?.name].filter(Boolean).join(' vs '),
+        startsAt: row.time ?? row.start_time ?? row.starting_at ?? row.date ?? null,
+        competition: row.competition?.name ?? row.league?.name ?? row.tournament?.name ?? row.competition_name ?? '',
+        status: row.status ?? 'upcoming',
+        source: 'SportScore'
+      })).filter((row: any) => row.title && row.startsAt)
+    } catch { return [] }
+  }))
+  const tvDates = dates.map(async date => {
+    try {
+      const [local, web] = await Promise.all([
+        fetch('https://api.tvmaze.com/schedule?country=ES&date=' + date, { signal: AbortSignal.timeout(12000) }),
+        fetch('https://api.tvmaze.com/schedule/web?date=' + date, { signal: AbortSignal.timeout(12000) })
+      ])
+      const rows = [...(local.ok ? await local.json() as any[] : []), ...(web.ok ? await web.json() as any[] : [])]
+      return rows.map((episode: any) => ({
+        id: 'tvmaze-' + episode.id,
+        title: episode.name || 'New episode',
+        show: episode._embedded?.show?.name || episode.show?.name || '',
+        season: episode.season,
+        episode: episode.number,
+        startsAt: episode.airstamp || (episode.airdate ? episode.airdate + 'T' + (episode.airtime || '00:00:00') + 'Z' : null),
+        image: episode.image?.medium || episode._embedded?.show?.image?.medium || null,
+        summary: String(episode.summary || '').replace(/<[^>]*>/g, '').slice(0, 240),
+        source: 'TVmaze'
+      })).filter((row: any) => row.show && row.startsAt)
+    } catch { return [] }
+  })
+  const [sportsResults, tvResults] = await Promise.all([Promise.all(requests), Promise.all(tvDates)])
+  const sportsEvents = sportsResults.flat().filter((row: any) => new Date(row.startsAt).getTime() >= Date.now() - 60_000)
+  const episodes = tvResults.flat()
+  const uniqueSports = Array.from(new Map(sportsEvents.map((row: any) => [row.id, row])).values()).sort((a: any,b: any) => Date.parse(a.startsAt)-Date.parse(b.startsAt))
+  const uniqueEpisodes = Array.from(new Map(episodes.map((row: any) => [row.id, row])).values()).sort((a: any,b: any) => Date.parse(a.startsAt)-Date.parse(b.startsAt))
+  const payload = { updatedAt: new Date().toISOString(), sports: uniqueSports, episodes: uniqueEpisodes, sources: ['SportScore', 'TVmaze'], broadcasterVerification: 'not_available_from_free_event_feed' }
+  discoveryCache = { expiresAt: Date.now() + 10 * 60_000, payload }
+  res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=300')
+  res.json(payload)
+})
+
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'jokstream-gateway' }))
 app.get('/api/catalog', async (req, res) => {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return res.status(503).json({ error: 'catalog_storage_not_configured' })
