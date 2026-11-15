@@ -28,7 +28,8 @@ function resolvePlayableUrl(input: string) {
   }
   if (window.location.protocol === 'https:' && parsed.protocol === 'http:') {
     const base = ((import.meta.env.VITE_MEDIAFLOW_URL as string | undefined) || DEFAULT_MEDIAFLOW_URL).replace(/\/+$/, '')
-    const isHls = /\\.m3u8(?:$|[?#])/i.test(parsed.href)\n    return base + (isHls ? '/proxy/hls/manifest.m3u8' : '/proxy/stream') + '?d=' + encodeURIComponent(parsed.href)
+    const isHls = /\.m3u8(?:$|[?#])/i.test(parsed.href)
+    return base + (isHls ? '/proxy/hls/manifest.m3u8' : '/proxy/stream') + '?d=' + encodeURIComponent(parsed.href)
   }
   return parsed.href
 }
