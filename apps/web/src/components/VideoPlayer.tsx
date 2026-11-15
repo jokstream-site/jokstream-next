@@ -41,6 +41,42 @@ function formatTime(seconds: number) {
   return Math.floor(seconds / 60) + ':' + Math.floor(seconds % 60).toString().padStart(2, '0')
 }
 
+const HTTP_REASONS: Record<number, string> = {
+  401: 'This subscription is not authorised for that stream.',
+  403: 'The provider refused this stream for the subscription.',
+  404: 'The stream was not found or is offline.',
+  429: 'The provider is rate-limiting this connection.',
+  500: 'The upstream server failed while starting the stream.',
+  502: 'The upstream source did not answer (502).',
+  503: 'No upstream server is currently able to play this stream.',
+  504: 'The upstream source timed out (504).',
+}
+
+function httpStatusMessage(status: number) {
+  return HTTP_REASONS[status] || `The stream request failed (HTTP ${status}).`
+}
+
+// Probe only after a media error, and only through our same-origin Gateway.
+// Deliberately do not send Range: it is not CORS-safelisted and can trigger
+// a preflight against provider/CDN redirects. Cancel the body as soon as the
+// response headers arrive so this diagnostic never downloads a second stream.
+async function probeHttpStatus(input: string): Promise<number> {
+  try {
+    const target = new URL(input, window.location.href)
+    if (target.origin !== window.location.origin) return 0
+    const response = await fetch(target.href, {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+    const status = response.status
+    try { await response.body?.cancel() } catch { /* response already closed */ }
+    return status
+  } catch {
+    return 0
+  }
+}
+
 export default function VideoPlayer({
   src, fallbackSrc, streamType, title, autoPlay = true, className = '', onStateChange,
 }: VideoPlayerProps) {
@@ -186,7 +222,10 @@ export default function VideoPlayer({
       mpegtsRef.current = player
       player.on(mpegts.Events.ERROR, (_type, detail) => {
         if (generation !== generationRef.current) return
-        fail('MPEG-TS playback error: ' + detail)
+        void probeHttpStatus(activeSrc).then(status => {
+          if (generation !== generationRef.current) return
+          fail(status >= 400 ? httpStatusMessage(status) : 'MPEG-TS playback error: ' + detail)
+        })
       })
       player.attachMediaElement(video)
       player.load()
@@ -212,12 +251,22 @@ export default function VideoPlayer({
       hlsRef.current = hls
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal || generation !== generationRef.current) return
-        const status = data.response?.code
-        if (status === 404) fail('Stream offline (404)')
-        else if (status) fail('Stream request failed (' + status + ')')
-        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) fail('Format unsupported')
-        else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) fail('Network error — stream unavailable')
-        else fail(data.details ? 'Playback error: ' + data.details : 'Playback failed')
+        const status = data.response?.code || 0
+        if (status >= 400) {
+          fail(httpStatusMessage(status))
+        } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          // Some CDN failures are hidden from the media engine after a redirect.
+          // Ask the same-origin Gateway for the final HTTP status before falling
+          // back to a generic network message.
+          void probeHttpStatus(activeSrc).then(probedStatus => {
+            if (generation !== generationRef.current) return
+            fail(probedStatus >= 400 ? httpStatusMessage(probedStatus) : 'Network error — stream unavailable')
+          })
+        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          fail('Format unsupported')
+        } else {
+          fail(data.details ? 'Playback error: ' + data.details : 'Playback failed')
+        }
       })
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (generation !== generationRef.current || !autoPlay) return
@@ -269,14 +318,18 @@ export default function VideoPlayer({
     const onError = () => {
       const code = video.error?.code
       if (!code) return
-      const message = code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+      const mediaMessage = code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
         ? 'Format unsupported'
         : code === MediaError.MEDIA_ERR_NETWORK
           ? 'Network error — stream unavailable'
           : code === MediaError.MEDIA_ERR_DECODE
             ? 'Format unsupported (decode error)'
             : 'Unable to load stream'
-      failCurrentAttemptRef.current(message)
+      const activeSrc = sourceIndexRef.current === 1 && fallbackSrc ? fallbackSrc : src
+      void probeHttpStatus(activeSrc).then(status => {
+        const message = status >= 400 ? httpStatusMessage(status) : mediaMessage
+        failCurrentAttemptRef.current(message)
+      })
     }
     video.addEventListener('playing', onPlaying)
     video.addEventListener('pause', onPause)
