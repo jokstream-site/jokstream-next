@@ -116,9 +116,14 @@ export default function App() {
 
   async function syncCatalog(e: React.FormEvent) {
     e.preventDefault()
+    const token = adminToken.trim()
+    if (!/^[\\x21-\\x7E]{32,}$/.test(token)) {
+      setAdminMessage('رمز الإدارة غير صالح: استخدم الرمز الإنجليزي كما هو، دون مسافات أو أحرف إضافية.')
+      return
+    }
     setAdminMessage('جارٍ مزامنة مكتبة المزود…')
     try {
-      const response = await fetch(API + '/api/admin/catalog/sync', { method: 'POST', headers: { Authorization: 'Bearer ' + adminToken } })
+      const response = await fetch(API + '/api/admin/catalog/sync', { method: 'POST', headers: { Authorization: 'Bearer ' + token } })
       const result = await response.json() as { synced?: number; error?: string }
       if (!response.ok) throw new Error(result.error || 'sync_failed')
       const refreshed = await fetch(API + '/api/catalog')
