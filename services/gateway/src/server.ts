@@ -198,7 +198,8 @@ app.get('/api/artwork/:kind', async (req, res) => {
     url.searchParams.set('include_adult', 'false')
     url.searchParams.set('language', 'en-US')
     url.searchParams.set('page', '1')
-    const response = await fetch(url, { headers: { Authorization: 'Bearer ' + env.TMDB_API_KEY, Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+    url.searchParams.set('api_key', env.TMDB_API_KEY)
+    const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
     if (!response.ok) throw new Error('tmdb_search_failed')
     const body = await response.json() as { results?: Array<any> }
     const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\\(\\d{4}\\)/g, ' ').replace(/\\b(19|20)\\d{2}\\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\\s+/g, ' ')
