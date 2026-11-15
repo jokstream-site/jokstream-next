@@ -158,7 +158,7 @@ async function apiFetch(cfg, params = {}) {
 }
 
 async function probeStream(cfg, id, ext) {
-  const target = new URL("/live/" + encodeURIComponent(cfg.username) + "/" +
+  let target = new URL("/live/" + encodeURIComponent(cfg.username) + "/" +
     encodeURIComponent(cfg.password) + "/" + id + "." + ext, cfg.origin);
   const headers = {
     "User-Agent": "okhttp/5.0.0-alpha.2",
@@ -167,30 +167,34 @@ async function probeStream(cfg, id, ext) {
     "Referer": cfg.origin + "/",
     "Origin": cfg.origin
   };
+  const redirectChain = [];
   let response;
   try {
-    response = await fetch(target, { headers, redirect: "manual", signal: AbortSignal.timeout(25000) });
+    for (let depth = 0; depth <= 4; depth++) {
+      if (!isAllowedProviderTarget(target, cfg)) {
+        return { format: ext, ok: false, error: "redirect_target_rejected", redirectChain, rejectedHost: target.hostname };
+      }
+      response = await fetch(target, { headers, redirect: "manual", signal: AbortSignal.timeout(25000) });
+      if (response.status < 300 || response.status >= 400) break;
+      const location = response.headers.get("Location");
+      redirectChain.push({ status: response.status, host: target.hostname });
+      if (!location) return { format: ext, ok: false, status: response.status, error: "redirect_missing_location", redirectChain };
+      if (depth === 4) return { format: ext, ok: false, status: response.status, error: "redirect_limit_exceeded", redirectChain };
+      target = new URL(location, target);
+    }
   } catch (error) {
-    return { format: ext, ok: false, error: error instanceof Error ? error.message : "Fetch failed" };
+    return { format: ext, ok: false, error: error instanceof Error ? error.name : "fetch_failed", redirectChain };
   }
   const result = {
     format: ext,
     status: response.status,
     ok: response.ok,
+    finalHost: target.hostname,
     contentType: response.headers.get("Content-Type"),
     contentLength: response.headers.get("Content-Length"),
-    acceptRanges: response.headers.get("Accept-Ranges")
+    acceptRanges: response.headers.get("Accept-Ranges"),
+    redirectChain
   };
-  if (response.status >= 300 && response.status < 400) {
-    const location = response.headers.get("Location");
-    if (location) {
-      const next = new URL(location, target);
-      result.redirectHost = next.hostname;
-      result.redirectPath = next.pathname;
-      result.redirectCrossOrigin = next.origin !== cfg.origin;
-    }
-    return result;
-  }
   if (response.ok && ext === "m3u8") {
     const body = await response.text();
     const hosts = new Set();
@@ -198,7 +202,7 @@ async function probeStream(cfg, id, ext) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       const uris = trimmed.startsWith("#")
-        ? [...trimmed.matchAll(/URI="([^"]+)"/g)].map(match => match[1])
+        ? [...trimmed.matchAll(/\bURI\s*=\s*(?:"([^"]*)"|'([^']*)'|([^,\s]+))/gi)].map(match => match[1] ?? match[2] ?? match[3])
         : [trimmed];
       for (const uri of uris) {
         try { hosts.add(new URL(uri, target).hostname); } catch {}
@@ -207,10 +211,11 @@ async function probeStream(cfg, id, ext) {
     result.manifestBytes = new TextEncoder().encode(body).length;
     result.resourceHosts = [...hosts].slice(0, 12);
     result.hasCrossOriginResources = [...hosts].some(host => host !== new URL(cfg.origin).hostname);
+  } else if (response.body) {
+    await response.body.cancel();
   }
   return result;
 }
-
 async function inspect(cfg, action, label) {
   const r = await apiFetch(cfg, { action });
   if (!r.ok) return { test: label, ok: false, status: r.status };
