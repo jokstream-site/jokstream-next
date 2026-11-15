@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import Hls from 'hls.js'
+import mpegts from 'mpegts.js'
 import { AlertCircle, Maximize, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
 
 type PlaybackState = 'connecting' | 'playing' | 'failed'
@@ -47,6 +48,7 @@ export default function VideoPlayer({
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
+  const mpegtsRef = useRef<ReturnType<typeof mpegts.createPlayer> | null>(null)
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const attemptRef = useRef(0)
@@ -78,6 +80,13 @@ export default function VideoPlayer({
   const teardown = useCallback(() => {
     clearTimers()
     const video = videoRef.current
+    if (mpegtsRef.current) {
+      mpegtsRef.current.pause()
+      mpegtsRef.current.unload()
+      mpegtsRef.current.detachMediaElement()
+      mpegtsRef.current.destroy()
+      mpegtsRef.current = null
+    }
     if (hlsRef.current) {
       hlsRef.current.stopLoad()
       hlsRef.current.detachMedia()
@@ -100,6 +109,13 @@ export default function VideoPlayer({
       return
     }
     clearTimers()
+    if (mpegtsRef.current) {
+      mpegtsRef.current.pause()
+      mpegtsRef.current.unload()
+      mpegtsRef.current.detachMediaElement()
+      mpegtsRef.current.destroy()
+      mpegtsRef.current = null
+    }
     if (hlsRef.current) {
       hlsRef.current.stopLoad()
       hlsRef.current.detachMedia()
@@ -142,9 +158,35 @@ export default function VideoPlayer({
 
     watchdogRef.current = setTimeout(() => fail('Connection timed out (15s)'), WATCHDOG_MS)
     const sourceUrl = new URL(src, window.location.href)
-    const isHls = streamType === 'live' || sourceUrl.searchParams.get('format') === 'hls' || /\.m3u8(?:$|[?#])/i.test(src) || /\.m3u8(?:$|[?#])/i.test(playableUrl)
+    const isMpegTs = sourceUrl.searchParams.get('format') === 'mpegts' || /\.ts(?:$|[?#])/i.test(sourceUrl.pathname)
+    const isHls = sourceUrl.searchParams.get('format') === 'hls' || /\.m3u8(?:$|[?#])/i.test(src) || /\.m3u8(?:$|[?#])/i.test(playableUrl)
 
-    if (isHls && Hls.isSupported()) {
+    if (isMpegTs && mpegts.isSupported()) {
+      const player = mpegts.createPlayer({
+        type: 'mpegts',
+        url: playableUrl,
+        isLive: streamType === 'live',
+        hasAudio: true,
+        hasVideo: true,
+      }, {
+        enableWorker: true,
+        enableStashBuffer: true,
+        stashInitialSize: 128 * 1024,
+        liveBufferLatencyChasing: true,
+        liveBufferLatencyMaxLatency: 1.5,
+        liveBufferLatencyMinRemain: 0.5,
+      })
+      mpegtsRef.current = player
+      player.on(mpegts.Events.ERROR, (_type, detail) => {
+        if (generation !== generationRef.current) return
+        fail('MPEG-TS playback error: ' + detail)
+      })
+      player.attachMediaElement(video)
+      player.load()
+      if (autoPlay) void player.play().catch(() => setPaused(true))
+    } else if (isMpegTs) {
+      fail('MPEG-TS playback is not supported by this browser')
+    } else if (isHls && Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: true,
