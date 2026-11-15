@@ -33,6 +33,7 @@ export default function App() {
   const [playbackError, setPlaybackError] = useState('')
   const [playbackLoading, setPlaybackLoading] = useState(false)
   const [episodes, setEpisodes] = useState<Episode[]>([])
+  const [contentDetails, setContentDetails] = useState<Record<string, any> | null>(null)
   const [selectedEpisodeId, setSelectedEpisodeId] = useState('')
   const [playing, setPlaying] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
@@ -139,15 +140,24 @@ export default function App() {
   }, [selected.id])
 
   useEffect(() => {
-    setPlaybackUrl(''); setPlaybackError(''); setPlaying(false)
-    if (selected.kind !== 'series' || !selected.id) { setEpisodes([]); setSelectedEpisodeId(''); return }
+    setPlaybackUrl(''); setPlaybackError(''); setPlaying(false); setContentDetails(null)
+    if (!selected.id) { setEpisodes([]); setSelectedEpisodeId(''); return }
     let alive = true
-    fetch(API + '/api/series/' + encodeURIComponent(selected.id)).then(async response => {
-      if (!response.ok) throw new Error('series_details_unavailable')
-      const info = await response.json() as { episodes?: Record<string, Array<{ id?: string|number; title?: string; episode_num?: number; container_extension?: string }>> }
-      const rows = Object.entries(info.episodes || {}).flatMap(([season, list]) => list.map(row => ({ id: String(row.id ?? ''), title: row.title || ('Episode ' + (row.episode_num ?? '')), season, episode_num: row.episode_num, container_extension: row.container_extension })).filter(row => row.id))
-      if (alive) { setEpisodes(rows); setSelectedEpisodeId(rows[0]?.id || '') }
-    }).catch(() => { if (alive) { setEpisodes([]); setPlaybackError('Could not load series episodes.') } })
+    if (selected.kind === 'series') {
+      fetch(API + '/api/series/' + encodeURIComponent(selected.id)).then(async response => {
+        if (!response.ok) throw new Error('series_details_unavailable')
+        const info = await response.json() as { info?: Record<string, any>; episodes?: Record<string, Array<{ id?: string|number; title?: string; episode_num?: number; container_extension?: string }>> }
+        const rows = Object.entries(info.episodes || {}).flatMap(([season, list]) => list.map(row => ({ id: String(row.id ?? ''), title: row.title || ('Episode ' + (row.episode_num ?? '')), season, episode_num: row.episode_num, container_extension: row.container_extension })).filter(row => row.id))
+        if (alive) { setContentDetails(info.info || {}); setEpisodes(rows); setSelectedEpisodeId(rows[0]?.id || '') }
+      }).catch(() => { if (alive) { setEpisodes([]); setContentDetails(null) } })
+    } else if (selected.kind === 'movie') {
+      setEpisodes([]); setSelectedEpisodeId('')
+      fetch(API + '/api/movie/' + encodeURIComponent(selected.id)).then(async response => {
+        if (!response.ok) throw new Error('movie_details_unavailable')
+        const info = await response.json()
+        if (alive) setContentDetails(info.info || info.movie_data || info)
+      }).catch(() => { if (alive) setContentDetails(null) })
+    } else { setEpisodes([]); setSelectedEpisodeId('') }
     return () => { alive = false }
   }, [selected.id, selected.kind])
 
@@ -354,6 +364,15 @@ export default function App() {
           </div>
           <div className="below-player"><div><span className="eyebrow">NOW SELECTED</span><h3>{selected.name}</h3></div><div className="player-tools"><button className="gold-button play-button" onClick={() => void playSelected()} disabled={!selected.id || playbackLoading || (selected.kind === 'series' && !selectedEpisodeId)}><Play size={15} fill="currentColor"/> {playbackLoading ? 'Starting stream…' : playing ? 'Play Again' : 'Play Now'}</button><button className="soft-button" onClick={() => setChatVisible(!chatVisible)}>{chatVisible ? <EyeOff size={16}/> : <Eye size={16}/>} {chatVisible ? 'Hide Chat' : 'Show Chat'}</button><button className="soft-button" onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>} {expanded ? 'Exit fullscreen' : 'Fullscreen'}</button></div></div>
           {selected.kind === 'series' && <div className="episode-list"><b>Series episodes</b>{episodes.length ? episodes.map(ep => <button key={ep.id} className={selectedEpisodeId === ep.id ? 'episode-chip active' : 'episode-chip'} onClick={() => { setSelectedEpisodeId(ep.id); setPlaybackUrl(''); setPlaying(false) }}>Season {ep.season} · {ep.title}</button>) : <span>Loading episodes or no episodes are available.</span>}</div>}{playbackLoading && <p className="playback-status">Connecting to secure stream…</p>}{playbackError && <p className="playback-error">{playbackError}</p>}
+          {selected.id && activeSection !== 'home' && activeSection !== 'sports' && <section className="content-detail-panel">
+            {contentDetails?.movie_image || contentDetails?.cover || contentDetails?.cover_big ? <img className="content-detail-poster" src={contentDetails.movie_image || contentDetails.cover_big || contentDetails.cover} alt={selected.name} loading="lazy"/> : <div className="content-detail-poster content-detail-placeholder">{selected.kind === 'movie' ? <Film size={34}/> : selected.kind === 'series' ? <Clapperboard size={34}/> : <Tv size={34}/>}</div>}
+            <div className="content-detail-copy"><span className="eyebrow">{selected.kind.toUpperCase()} · {selected.category}</span><h2>{selected.name}</h2>
+              {contentDetails?.plot && <p>{contentDetails.plot}</p>}
+              <div className="content-detail-meta">{[contentDetails?.released || contentDetails?.releaseDate, contentDetails?.genre, contentDetails?.rating ? '★ ' + contentDetails.rating : '', contentDetails?.duration].filter(Boolean).map((value:any,index:number)=><span key={index}>{String(value)}</span>)}</div>
+              {contentDetails?.cast && <small>Cast: {contentDetails.cast}</small>}
+              <button className="gold-button play-button" onClick={() => void playSelected()} disabled={playbackLoading || (selected.kind === 'series' && !selectedEpisodeId)}><Play size={15} fill="currentColor"/> {playbackLoading ? 'Starting…' : 'Play Now'}</button>
+            </div>
+          </section>}
           <div className="section-heading channel-heading"><div><span className="eyebrow">BROWSE THE CATALOG</span><h2>Catalog & Categories</h2></div><button className="text-link" onClick={() => {setActiveSection('live');setActiveCategory('All')}}>All Channels <span>←</span></button></div>
           <div className="catalog-category-row" aria-label="Catalog folders">{categoryNames.map(category=><button type="button" key={category} aria-pressed={activeCategory===category} className={activeCategory===category?'category-chip active':'category-chip'} onClick={()=>setActiveCategory(category)}>{category==='All'?'All categories':category}{category!=='All' ? <small className="category-count">{catalogCategories.find(row=>row.name===category)?.count.toLocaleString('en-US') || ''}</small> : null}</button>)}</div>
           <div id="catalog-items" className="catalog-items-heading"><span className="eyebrow">FOLDER CONTENTS</span><h3>{activeCategory==='All'?'All catalog items':activeCategory}</h3><span>{(activeCategory==='All' ? catalogTotal : catalogCategories.find(row=>row.name===activeCategory)?.count || catalogTotal).toLocaleString('en-US')} items</span></div>
