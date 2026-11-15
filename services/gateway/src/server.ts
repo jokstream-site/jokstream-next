@@ -72,6 +72,53 @@ app.get('/api/status', (_req, res) => res.json({
   updatedAt: lastSync
 }))
 
+app.get('/api/admin/provider/diagnostics', requireAdmin, async (_req, res) => {
+  if (!env.XTREAM_API_BASE_URL || !env.XTREAM_PROXY_TOKEN) {
+    res.status(503).json({ error: 'cloudflare_proxy_not_configured' }); return
+  }
+  if (!env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) {
+    res.status(503).json({ error: 'provider_credentials_not_configured' }); return
+  }
+  const base = env.XTREAM_API_BASE_URL.replace(/\\/$/, '')
+  const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD })
+  const checks: Record<string, unknown> = {}
+  try {
+    const accountResponse = await xtreamFetch(base + '?' + params, 15000)
+    checks.account = { status: accountResponse.status, ok: accountResponse.ok }
+    if (accountResponse.ok) {
+      const account = await accountResponse.json() as { user_info?: { auth?: number; status?: string; exp_date?: string } }
+      checks.account = { status: accountResponse.status, ok: true, authenticated: account.user_info?.auth === 1, accountStatus: account.user_info?.status ?? null, expiresAt: account.user_info?.exp_date ?? null }
+    }
+    const actions = [
+      { key: 'liveChannels', action: 'get_live_streams' },
+      { key: 'liveCategories', action: 'get_live_categories' },
+      { key: 'movies', action: 'get_vod_streams' },
+      { key: 'series', action: 'get_series' }
+    ]
+    for (const item of actions) {
+      try {
+        const response = await xtreamFetch(base + '?' + params + '&action=' + item.action, 25000)
+        if (!response.ok) {
+          checks[item.key] = { status: response.status, ok: false }
+          continue
+        }
+        const rows = await response.json() as Array<{ name?: string; title?: string; category_name?: string }>
+        checks[item.key] = {
+          status: response.status,
+          ok: true,
+          count: Array.isArray(rows) ? rows.length : null,
+          sample: Array.isArray(rows) ? rows.slice(0, 8).map(row => row.name ?? row.title ?? row.category_name ?? 'بدون اسم') : null
+        }
+      } catch (error) {
+        checks[item.key] = { ok: false, error: error instanceof Error ? error.name : 'unknown' }
+      }
+    }
+    res.json({ route: 'gateway -> cloudflare worker -> provider', checkedAt: new Date().toISOString(), checks })
+  } catch (error) {
+    res.status(502).json({ route: 'gateway -> cloudflare worker -> provider', error: error instanceof Error ? error.name : 'connection_failed', checks })
+  }
+})
+
 app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
   if (env.UPSTREAM_REDISTRIBUTION_AUTHORIZED !== 'true') {
     res.status(403).json({ error: 'provider_redistribution_authorization_required' }); return
