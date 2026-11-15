@@ -314,7 +314,7 @@ export default function App() {
       <div className="top-actions"><label className="searchbox"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search channels, movies and series"/></label><button className="profile-button" title="Profile">{nickname ? nickname.slice(0,1).toUpperCase() : 'J'}</button></div>
     </header>
 
-    <main className={`page jok-home section-${activeSection}`}>
+    <main className={`page jok-home section-${activeSection} ${playbackLoading || playbackUrl ? 'playing-view' : ''}`}>
       <section className="jok-hero">
         <div className="jok-hero-copy">
           <span className="hero-kicker"><i/> JOKSTREAM ORIGINAL EXPERIENCE</span>
@@ -367,7 +367,7 @@ export default function App() {
           {activeSection === 'sports' && <section className="sports-library-panel"><div className="section-heading"><div><span className="eyebrow">LIVE SPORTS DATA</span><h2>Upcoming Events</h2></div><span className="jok-section-note">Verified fixtures · SportScore</span></div>
             {discovery.sports?.length ? <div className="event-grid">{discovery.sports.map((event:any)=><article className="event-card" key={event.id}><span className="event-sport">{event.sport}</span><b>{event.title}</b><small>{event.competition || 'Fixture'}</small><time><Clock size={13}/> {new Date(event.startsAt).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</time><span className="event-channel-unverified">Broadcast channel not verified</span></article>)}</div> : <div className="catalog-empty"><b>No upcoming fixtures returned</b><p>The sports feed has no scheduled events at the moment.</p></div>}
             <a className="source-credit" href="https://sportscore.com/" target="_blank" rel="noreferrer">Powered by SportScore</a></section>}
-          {selected.id && activeSection !== 'home' && activeSection !== 'sports' && <section className="content-detail-panel">
+          {selected.id && ((activeSection === 'live' && selected.kind === 'live') || (activeSection === 'movies' && selected.kind === 'movie') || (activeSection === 'series' && selected.kind === 'series')) && <section className="content-detail-panel">
             {contentDetails?.movie_image || contentDetails?.cover || contentDetails?.cover_big || selected.image_url ? <img className="content-detail-poster" src={contentDetails?.movie_image || contentDetails?.cover_big || contentDetails?.cover || selected.image_url} alt={selected.name} loading="lazy"/> : <div className="content-detail-poster content-detail-placeholder">{selected.kind === 'movie' ? <Film size={34}/> : selected.kind === 'series' ? <Clapperboard size={34}/> : <Tv size={34}/>}</div>}
             <div className="content-detail-copy"><span className="eyebrow">{selected.kind.toUpperCase()} · {selected.category}</span><h2>{selected.name}</h2>
               {contentDetails?.plot && <p>{contentDetails.plot}</p>}
