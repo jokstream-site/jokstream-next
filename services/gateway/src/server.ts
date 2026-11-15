@@ -551,8 +551,8 @@ async function runCatalogSync() {
         const name = String(row.name ?? row.title ?? '').trim()
         const separatorHeader = /^(?:[-=_.\s]{3,}|.*(?:^|\s)[-=]{3,}.*|.*[-=]{3,}$)$/.test(name)
         if (!/^\d{1,20}$/.test(id) || !name || separatorHeader) continue
-        const rawImage = String(row.stream_icon ?? row.cover ?? row.movie_image ?? '')
-        const imageUrl = /^https:/i.test(rawImage) ? rawImage.slice(0, 2048) : null
+        const rawImage = String(row.stream_icon || row.cover || row.movie_image || '')
+        const imageUrl = /^https?:\/\//i.test(rawImage) ? rawImage.slice(0, 2048) : null
         batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4'), image_url: imageUrl })
         if (batch.length >= 100) {
           await supabaseRpc('jok_catalog_sync_batch', { p_token: env.CATALOG_SYNC_SECRET, p_version: version, p_items: batch })
@@ -658,6 +658,7 @@ app.all('/api/stream/:token', async (req, res) => {
       signal: AbortSignal.timeout(90_000)
     })
     res.status(upstream.status)
+    if (!upstream.ok) console.warn('[stream-upstream-status]', { status: upstream.status, url: safeUrlForLog(upstream.url || target.toString()), hasRange: Boolean(range) })
     for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) {
       const value = upstream.headers.get(header)
       if (value) res.setHeader(header, value)
@@ -762,7 +763,8 @@ app.post('/api/playback', async (req, res) => {
       kind,
       upstream: safeXtreamUrlForLog(upstreamUrl),
       mediaflow: safeUrlForLog(target.toString()),
-      frontend: publicUrl
+      frontend: req.protocol + '://' + req.get('host') + '/api/stream/[opaque-token]',
+      extension
     })
     res.json({ url: publicUrl, expiresIn: 1800, kind, extension })
   } catch (error) {
