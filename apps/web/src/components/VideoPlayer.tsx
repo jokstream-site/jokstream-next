@@ -89,6 +89,7 @@ export default function VideoPlayer({
   const sourceIndexRef = useRef(0)
   const failCurrentAttemptRef = useRef<(message: string) => void>(() => {})
   const generationRef = useRef(0)
+  const attemptTokenRef = useRef(0)
 
   const [state, setState] = useState<PlaybackState>('connecting')
   const [reason, setReason] = useState('')
@@ -165,6 +166,7 @@ export default function VideoPlayer({
 
     const attemptNumber = attemptRef.current + 1
     attemptRef.current = attemptNumber
+    const attemptToken = ++attemptTokenRef.current
     setRetryCount(Math.max(0, attemptNumber - 1))
     setCurrentTime(0)
     setDuration(0)
@@ -182,7 +184,7 @@ export default function VideoPlayer({
 
     let failed = false
     const fail = (message: string) => {
-      if (failed || generation !== generationRef.current) return
+      if (failed || generation !== generationRef.current || attemptToken !== attemptTokenRef.current) return
       failed = true
       clearTimers()
       if (attemptRef.current <= MAX_AUTO_RETRIES) {
@@ -221,9 +223,9 @@ export default function VideoPlayer({
       })
       mpegtsRef.current = player
       player.on(mpegts.Events.ERROR, (_type, detail) => {
-        if (generation !== generationRef.current) return
+        if (generation !== generationRef.current || attemptToken !== attemptTokenRef.current) return
         void probeHttpStatus(activeSrc).then(status => {
-          if (generation !== generationRef.current) return
+          if (generation !== generationRef.current || attemptToken !== attemptTokenRef.current) return
           fail(status >= 400 ? httpStatusMessage(status) : 'MPEG-TS playback error: ' + detail)
         })
       })
@@ -250,7 +252,7 @@ export default function VideoPlayer({
       })
       hlsRef.current = hls
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (!data.fatal || generation !== generationRef.current) return
+        if (!data.fatal || generation !== generationRef.current || attemptToken !== attemptTokenRef.current) return
         const status = data.response?.code || 0
         if (status >= 400) {
           fail(httpStatusMessage(status))
@@ -259,7 +261,7 @@ export default function VideoPlayer({
           // Ask the same-origin Gateway for the final HTTP status before falling
           // back to a generic network message.
           void probeHttpStatus(activeSrc).then(probedStatus => {
-            if (generation !== generationRef.current) return
+            if (generation !== generationRef.current || attemptToken !== attemptTokenRef.current) return
             fail(probedStatus >= 400 ? httpStatusMessage(probedStatus) : 'Network error — stream unavailable')
           })
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
@@ -318,18 +320,14 @@ export default function VideoPlayer({
     const onError = () => {
       const code = video.error?.code
       if (!code) return
-      const mediaMessage = code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+      const message = code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
         ? 'Format unsupported'
         : code === MediaError.MEDIA_ERR_NETWORK
           ? 'Network error — stream unavailable'
           : code === MediaError.MEDIA_ERR_DECODE
             ? 'Format unsupported (decode error)'
             : 'Unable to load stream'
-      const activeSrc = sourceIndexRef.current === 1 && fallbackSrc ? fallbackSrc : src
-      void probeHttpStatus(activeSrc).then(status => {
-        const message = status >= 400 ? httpStatusMessage(status) : mediaMessage
-        failCurrentAttemptRef.current(message)
-      })
+      failCurrentAttemptRef.current(message)
     }
     video.addEventListener('playing', onPlaying)
     video.addEventListener('pause', onPause)
