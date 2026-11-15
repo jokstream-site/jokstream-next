@@ -33,3 +33,59 @@
 .admin-panel form input:focus{border-color:#c6a05f}
 .admin-message{margin-top:13px;padding:10px;border-radius:9px;background:#c6a05f14;color:#dfc58e;font-size:12px;line-height:1.6}
 .admin-hint{margin-top:16px;padding-top:13px;border-top:1px solid #ffffff12;color:#777;font-size:10px;line-height:1.8}
+
+
+/* JokStream cinematic discovery home */
+.jok-home{padding-bottom:34px}
+.jok-hero{min-height:365px;margin:22px 0 18px;border:1px solid #ffffff16;border-radius:22px;overflow:hidden;position:relative;display:flex;align-items:center;padding:42px 5%;background:radial-gradient(ellipse at 78% 48%,#9f203a66 0,transparent 34%),radial-gradient(ellipse at 60% 5%,#173f6c99 0,transparent 45%),linear-gradient(115deg,#080b14 0%,#15101b 52%,#260d1b 100%);box-shadow:0 22px 60px #0008}
+.jok-hero:before{content:'';position:absolute;inset:0;background:linear-gradient(90deg,#080a10 0%,#080a10d9 40%,transparent 100%);pointer-events:none}
+.jok-hero-copy{position:relative;z-index:2;max-width:570px}
+.hero-kicker{display:flex;align-items:center;gap:8px;color:#e6c27c;font:700 10px 'DM Sans','Tajawal';letter-spacing:2px}
+.hero-kicker i{width:7px;height:7px;border-radius:50%;background:#ff4054;box-shadow:0 0 15px #ff4054}
+.hero-live-label{display:inline-block;margin-top:24px;padding:6px 12px;border-radius:30px;background:#d51d3828;border:1px solid #ed526366;color:#ffc3c9;font-size:11px}
+.jok-hero h1{font-size:clamp(28px,4vw,49px);line-height:1.2;margin:13px 0 9px;max-width:600px}
+.jok-hero p{color:#c0bbc3;font-size:13px;line-height:1.9;max-width:460px}
+.hero-actions{display:flex;gap:10px;margin-top:22px;flex-wrap:wrap}
+.hero-primary,.hero-secondary{height:43px;padding:0 17px;border-radius:10px;display:flex;align-items:center;gap:9px;font-weight:700;font-size:12px}
+.hero-primary{border:0;background:linear-gradient(110deg,#fa2947,#b70c2c);color:white;box-shadow:0 8px 28px #f21e453c}
+.hero-secondary{border:1px solid #ffffff2b;background:#ffffff12;color:#f4e9e9}
+.jok-hero-art{position:absolute;inset:0 0 0 45%;display:grid;place-items:center;opacity:.9}
+.hero-orbit{width:min(33vw,370px);height:min(33vw,370px);border:1px solid #e4bd7838;border-radius:50%;box-shadow:0 0 0 28px #ffffff05,0 0 0 58px #ffffff04,0 0 100px #c3214b22}
+.hero-play-mark{position:absolute;width:128px;height:128px;border-radius:38px;display:grid;place-items:center;color:#f4d69a;background:linear-gradient(145deg,#e7c17c33,#9c173d44);border:1px solid #e5c17b66;box-shadow:0 0 65px #d72d5738;transform:rotate(-9deg)}
+.hero-floating{position:absolute;padding:8px 12px;border-radius:9px;background:#0a0b12cc;border:1px solid #ffffff24;color:#f3d28c;font:800 12px 'DM Sans';letter-spacing:2px}
+.hero-floating.one{top:26%;right:20%}.hero-floating.two{bottom:24%;left:19%;color:#ff8491}
+.hero-pagination{position:absolute;bottom:19px;left:0;right:0;display:flex;justify-content:center;gap:12px}
+.hero-pagination i{width:8px;height:8px;border-radius:50%;background:#ffffff55}.hero-pagination i.active{background:#ff344f;box-shadow:0 0 12px #ff344f}
+.jok-shortcuts{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;margin:0 0 34px;padding:10px;border:1px solid #ffffff1b;border-radius:17px;background:linear-gradient(110deg,#101522,#15111b);box-shadow:0 12px 35px #0006}
+.jok-shortcuts button{min-height:86px;border:0;border-left:1px solid #ffffff12;background:transparent;color:#e7e3e8;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:9px;transition:.2s}
+.jok-shortcuts button:last-child{border-left:0}
+.jok-shortcuts button svg{width:26px;height:26px;color:#e4bd75;filter:drop-shadow(0 0 9px #c79a4c66)}
+.jok-shortcuts button:nth-child(2) svg{color:#ffbd52}.jok-shortcuts button:nth-child(3) svg{color:#ce72ff}.jok-shortcuts button:nth-child(4) svg{color:#eee}.jok-shortcuts button:nth-child(5) svg{color:#35d6ef}.jok-shortcuts button:nth-child(6) svg{color:#ffd34e}
+.jok-shortcuts button b{font-size:12px}.jok-shortcuts button:hover{background:#ffffff09;border-radius:11px;transform:translateY(-2px)}
+.jok-section{margin:0 0 32px}
+.jok-section-head{display:flex;align-items:end;justify-content:space-between;margin-bottom:14px}
+.jok-section-head h2{display:flex;align-items:center;gap:9px;font-size:21px;margin:5px 0 0}.jok-section-head h2 svg{color:#ff714d;fill:#ff714d22}
+.jok-section-note{font-size:10px;color:#8e8991}
+.jok-picks-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px}
+.jok-pick-card{min-width:0;padding:0;text-align:right;border:1px solid #ffffff16;border-radius:14px;overflow:hidden;background:#11121a;color:#f4f0eb;transition:.22s}
+.jok-pick-card:hover{transform:translateY(-4px);border-color:#d2a75d88;box-shadow:0 14px 32px #0007}
+.pick-art{height:170px;position:relative;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 50% 35%,#79413b,#241a22 65%,#101018)}
+.pick-1 .pick-art{background:radial-gradient(circle at 50% 35%,#405c8b,#141c31 70%)}
+.pick-2 .pick-art{background:radial-gradient(circle at 50% 35%,#62427e,#1c1429 70%)}
+.pick-3 .pick-art{background:radial-gradient(circle at 50% 35%,#8a6631,#211a13 70%)}
+.pick-art:after{content:'';position:absolute;inset:0;background:linear-gradient(0deg,#090a10bb,transparent 70%)}
+.pick-art-symbol{color:#f3d28d;filter:drop-shadow(0 8px 20px #000);opacity:.9}
+.pick-kind{position:absolute;z-index:1;top:10px;right:10px;border:1px solid #ffffff3a;background:#07080b99;padding:5px 9px;border-radius:30px;font-size:10px}
+.pick-play{position:absolute;z-index:2;bottom:12px;left:12px;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:#f0c77c;color:#17120a;opacity:0;transition:.2s}
+.jok-pick-card:hover .pick-play{opacity:1}
+.pick-info{display:block;padding:11px 12px}.pick-info b,.pick-info small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pick-info b{font-size:12px}.pick-info small{font-size:10px;color:#99939c;margin-top:4px}
+.jok-no-picks{grid-column:1/-1;padding:24px;text-align:center;color:#aaa;border:1px dashed #ffffff24;border-radius:12px}
+.jok-sports-banner{margin:0 0 31px;min-height:118px;padding:20px 24px;display:flex;align-items:center;gap:18px;border:1px solid #6b56a766;border-radius:16px;background:radial-gradient(ellipse at 85% 50%,#58408b55,transparent 48%),linear-gradient(100deg,#101629,#1c1530);position:relative;overflow:hidden}
+.sports-emblem{width:60px;height:60px;border-radius:17px;display:grid;place-items:center;color:#d9c5ff;background:#8864d52b;border:1px solid #b39af766;flex:0 0 60px}
+.jok-sports-banner h3{font-size:18px;margin:4px 0}.jok-sports-banner p{font-size:11px;line-height:1.8;color:#b5b0c1;margin:0;max-width:680px}
+.sports-status{margin-right:auto;white-space:nowrap;border:1px solid #c6a2ff55;background:#6d50a622;border-radius:30px;padding:7px 12px;color:#d4c0ff;font-size:10px}
+.catalog-category-row{display:flex;gap:8px;overflow-x:auto;padding:3px 1px 13px;margin-bottom:10px;scrollbar-width:thin}
+.category-chip{white-space:nowrap;border:1px solid #ffffff20;border-radius:30px;background:#ffffff08;color:#bcb7bd;padding:8px 14px;font-size:11px}
+.category-chip.active,.category-chip:hover{background:#c69b4a20;border-color:#d3ae6a;color:#f1d59b}
+@media(max-width:760px){.jok-hero{min-height:315px;padding:28px 22px;margin-top:15px}.jok-hero-art{inset:0 0 0 25%;opacity:.48}.jok-hero:before{background:linear-gradient(90deg,#080a10 0%,#080a10e8 50%,#080a1055 100%)}.jok-hero-copy{max-width:80%}.jok-hero h1{font-size:31px}.jok-shortcuts{grid-template-columns:repeat(3,minmax(0,1fr));padding:7px}.jok-shortcuts button{min-height:75px}.jok-shortcuts button:nth-child(3){border-left:0}.jok-shortcuts button:nth-child(n+4){border-top:1px solid #ffffff12}.jok-picks-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pick-art{height:145px}.jok-sports-banner{align-items:flex-start;padding:17px}.sports-status{position:absolute;bottom:12px;left:13px;font-size:9px}.jok-sports-banner p{padding-bottom:26px}.jok-section-note{display:none}}
+@media(max-width:420px){.jok-hero{min-height:300px}.jok-hero-copy{max-width:100%}.jok-hero-art{inset:0 0 0 8%;opacity:.3}.jok-hero h1{font-size:26px}.hero-primary,.hero-secondary{height:39px;padding:0 12px;font-size:11px}.jok-shortcuts button b{font-size:11px}.pick-art{height:125px}}
