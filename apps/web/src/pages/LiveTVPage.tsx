@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Search, Tv, LoaderCircle } from 'lucide-react'
 import WatchChannelModal from '../components/WatchChannelModal'
 const API = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || ''
-function imageSrc(value?:string|null){if(!value)return '';if(/^http:\\/\\//i.test(value))return API+'/api/img-proxy?url='+encodeURIComponent(value);return value}\ntype Item = { id: string; item_id?: string; name: string; category?: string; image_url?: string | null }
+function imageSrc(value?:string|null){if(!value)return '';if(/^http:\/\//i.test(value))return API+'/api/img-proxy?url='+encodeURIComponent(value);return value}
+type Item = { id: string; item_id?: string; name: string; category?: string; image_url?: string | null }
 export default function LiveTVPage() {
  const [items,setItems]=useState<Item[]>([]),[page,setPage]=useState(1),[more,setMore]=useState(false),[total,setTotal]=useState(0),[category,setCategory]=useState('All'),[categories,setCategories]=useState<string[]>([]),[search,setSearch]=useState(''),[loading,setLoading]=useState(true),[selected,setSelected]=useState<Item|null>(null),[url,setUrl]=useState(''),[error,setError]=useState('')
  useEffect(()=>{fetch(API+'/api/catalog/categories?kind=live').then(r=>r.ok?r.json():Promise.reject()).then(d=>setCategories((d.categories||[]).map((x:any)=>String(x.name||x.category||'')).filter(Boolean))).catch(()=>setCategories([]))},[])
