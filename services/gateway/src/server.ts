@@ -154,6 +154,40 @@ app.get('/api/discovery', async (_req, res) => {
   res.json(payload)
 })
 
+app.get('/api/img-proxy', async (req, res) => {
+  const raw = String(req.query.url || '').trim()
+  if (!raw || raw.length > 2048) return res.status(400).json({ error: 'invalid_image_url' })
+  try {
+    const target = new URL(raw)
+    const providerHost = env.XTREAM_BASE_URL ? new URL(env.XTREAM_BASE_URL).hostname : ''
+    if (!['http:', 'https:'].includes(target.protocol) || ![providerHost, 'image.tmdb.org'].includes(target.hostname)) {
+      return res.status(400).json({ error: 'image_host_not_allowed' })
+    }
+    const upstream = await fetch(target, {
+      headers: { Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8', 'User-Agent': 'Mozilla/5.0 JokStream/1.0' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(12000)
+    })
+    if (upstream.status >= 300 && upstream.status < 400) {
+      const location = upstream.headers.get('location')
+      if (!location || new URL(location, target).hostname !== target.hostname) return res.status(502).end()
+      const redirected = await fetch(new URL(location, target), { headers: { Accept: 'image/*', 'User-Agent': 'Mozilla/5.0 JokStream/1.0' }, signal: AbortSignal.timeout(12000) })
+      if (!redirected.ok) return res.status(502).end()
+      const contentType = redirected.headers.get('content-type') || ''
+      if (!contentType.startsWith('image/')) return res.status(415).end()
+      res.setHeader('Content-Type', contentType)
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
+      return res.send(Buffer.from(await redirected.arrayBuffer()))
+    }
+    if (!upstream.ok) return res.status(502).end()
+    const contentType = upstream.headers.get('content-type') || ''
+    if (!contentType.startsWith('image/')) return res.status(415).end()
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
+    res.send(Buffer.from(await upstream.arrayBuffer()))
+  } catch { res.status(502).json({ error: 'image_proxy_failed' }) }
+})
+
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'jokstream-gateway' }))
 app.get('/api/catalog/categories', async (req, res) => {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return res.status(503).json({ error: 'catalog_storage_not_configured' })
@@ -182,15 +216,12 @@ app.get('/api/catalog', async (req, res) => {
   } catch { res.status(502).json({ error: 'catalog_storage_unavailable' }) }
 })
 
-const artworkCache = new Map<string, { expiresAt: number; value: unknown }>()
-app.get('/api/artwork/:kind', async (req, res) => {
-  const kind = String(req.params.kind)
-  const title = String(req.query.title || '').trim().slice(0, 180)
-  if (!['movie', 'series'].includes(kind) || !title) return res.status(400).json({ error: 'invalid_artwork_request' })
+const artworkCache = new Map<string, { expiresAt: number; value: any }>()
+async function lookupArtwork(kind: 'movie' | 'series', title: string) {
   const key = kind + ':' + title.toLocaleLowerCase('en')
   const cached = artworkCache.get(key)
-  if (cached && cached.expiresAt > Date.now()) return res.json(cached.value)
-  if (!env.TMDB_API_KEY) return res.status(503).json({ error: 'tmdb_api_key_not_configured' })
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  if (!env.TMDB_API_KEY) return null
   try {
     const endpoint = kind === 'movie' ? 'movie' : 'tv'
     const url = new URL('https://api.themoviedb.org/3/search/' + endpoint)
@@ -202,7 +233,7 @@ app.get('/api/artwork/:kind', async (req, res) => {
     const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
     if (!response.ok) throw new Error('tmdb_search_failed')
     const body = await response.json() as { results?: Array<any> }
-    const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+    const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\\(\\d{4}\\)/g, ' ').replace(/\\b(19|20)\\d{2}\\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\\s+/g, ' ')
     const match = (body.results || []).find(item => normalize(String(item.title || item.name || item.original_title || item.original_name || '')) === normalize(title))
     const value = match ? {
       matched: true,
@@ -216,9 +247,20 @@ app.get('/api/artwork/:kind', async (req, res) => {
       genres: []
     } : { matched: false }
     artworkCache.set(key, { expiresAt: Date.now() + (match ? 24 : 6) * 60 * 60_000, value })
-    res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400')
-    res.json(value)
-  } catch { res.status(502).json({ error: 'tmdb_unavailable' }) }
+    return value
+  } catch {
+    return null
+  }
+}
+app.get('/api/artwork/:kind', async (req, res) => {
+  const kind = String(req.params.kind)
+  const title = String(req.query.title || '').trim().slice(0, 180)
+  if (!['movie', 'series'].includes(kind) || !title) return res.status(400).json({ error: 'invalid_artwork_request' })
+  if (!env.TMDB_API_KEY) return res.status(503).json({ error: 'tmdb_api_key_not_configured' })
+  const value = await lookupArtwork(kind as 'movie' | 'series', title)
+  if (!value) return res.status(502).json({ error: 'tmdb_unavailable' })
+  res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400')
+  res.json(value)
 })
 
 function cleanCatalogRow(row: any) {
@@ -255,6 +297,40 @@ async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.R
     }
     sourceOffset += rows.length
     if (rows.length < chunkSize || (sourceTotal > 0 && sourceOffset >= sourceTotal)) exhausted = true
+  }
+  if (kind === 'movie' || kind === 'series') {
+    let cursor = 0
+    const workers = Array.from({ length: Math.min(6, items.length) }, async () => {
+      while (cursor < items.length) {
+        const index = cursor++
+        const item = items[index]
+        if (item.image_url || item.poster) {
+          item.poster = item.image_url || item.poster
+          continue
+        }
+        const artwork = await lookupArtwork(kind, String(item.name || ''))
+        item.poster = artwork?.matched ? artwork.poster : null
+      }
+    })
+    await Promise.all(workers)
+  } else if (kind === 'live' && env.XTREAM_USERNAME && env.XTREAM_PASSWORD) {
+    try {
+      const cacheKey = 'live-provider-icons'
+      const cached = artworkCache.get(cacheKey)
+      let iconMap: Map<string, string>
+      if (cached && cached.expiresAt > Date.now()) {
+        iconMap = cached.value as Map<string, string>
+      } else {
+        const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\\/$/, '') : env.XTREAM_BASE_URL!.replace(/\\/$/, '') + '/player_api.php'
+        const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_live_streams' })
+        const response = await xtreamFetch(apiBase + '?' + params, 25000)
+        if (!response.ok) throw new Error('live_icons_unavailable')
+        const rows = await response.json() as Array<{ stream_id?: string | number; stream_icon?: string }>
+        iconMap = new Map((Array.isArray(rows) ? rows : []).map(row => [String(row.stream_id ?? ''), String(row.stream_icon ?? '')]).filter((entry): entry is [string, string] => /^\\d+$/.test(entry[0]) && /^https?:\\/\\//i.test(entry[1])))
+        artworkCache.set(cacheKey, { expiresAt: Date.now() + 30 * 60_000, value: iconMap })
+      }
+      for (const item of items) item.image_url = item.image_url || iconMap.get(String(item.item_id || item.id)) || null
+    } catch { /* keep the subscribed catalog available when provider artwork is unavailable */ }
   }
   return { items, page, limit, total: sourceTotal, hasMore: !exhausted || items.length === limit }
 }
@@ -488,7 +564,7 @@ app.post('/api/playback', async (req, res) => {
   if (!env.MEDIAFLOW_BASE_URL || !env.MEDIAFLOW_API_PASSWORD) return res.status(503).json({ error: 'media_proxy_not_configured' })
 
   try {
-    let extension = input.data.kind === 'live' ? 'ts' : 'mp4'
+    let extension = input.data.kind === 'live' ? 'm3u8' : 'mp4'
     if (input.data.kind === 'series') {
       if (!input.data.seriesId) return res.status(400).json({ error: 'series_id_required' })
       const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: input.data.seriesId })
@@ -501,7 +577,7 @@ app.post('/api/playback', async (req, res) => {
       if (!episode) return res.status(404).json({ error: 'episode_not_found' })
       extension = episode.container_extension || 'mp4'
     } else {
-      extension = input.data.kind === 'live' ? 'ts' : 'mp4'
+      extension = input.data.kind === 'live' ? 'm3u8' : 'mp4'
     }
 
     const path = input.data.kind === 'live' ? 'live' : input.data.kind === 'movie' ? 'movie' : 'series'
@@ -516,6 +592,7 @@ app.post('/api/playback', async (req, res) => {
         endpoint: isHls ? '/proxy/hls/manifest.m3u8' : '/proxy/stream',
         destination_url: upstream,
         query_params: (!isHls && ['ts', 'mkv', 'avi'].includes(extension.toLowerCase())) ? { transcode: 'true' } : {},
+        request_headers: { 'User-Agent': 'Mozilla/5.0 JokStream/1.0', Accept: '*/*' },
         api_password: env.MEDIAFLOW_API_PASSWORD,
         expiration: 1800
       }),
