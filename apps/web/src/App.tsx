@@ -6,4 +6,5 @@ import LiveTVPage from './pages/LiveTVPage'
 import MoviesPage from './pages/MoviesPage'
 import SeriesPage from './pages/SeriesPage'
 import MorePage from './pages/MorePage'
-export default function App(){return <BrowserRouter><div className="min-h-screen bg-[#090a0f] text-white"><Navbar/><main className="mx-auto max-w-[1500px] px-4 pb-28 pt-24 sm:px-7 lg:pb-12"><Routes><Route path="/" element={<HomePage/>}/><Route path="/live" element={<LiveTVPage/>}/><Route path="/movies" element={<MoviesPage/>}/><Route path="/series" element={<SeriesPage/>}/><Route path="/more" element={<MorePage/>}/><Route path="*" element={<Navigate to="/" replace/>}/></Routes></main><BottomNav/></div></BrowserRouter>}
+import EventsPage from './pages/EventsPage'
+export default function App(){return <BrowserRouter><div className="min-h-screen bg-[#090a0f] text-white"><Navbar/><main className="mx-auto max-w-[1500px] px-4 pb-28 pt-24 sm:px-7 lg:pb-12"><Routes><Route path="/" element={<HomePage/>}/><Route path="/live" element={<LiveTVPage/>}/><Route path="/movies" element={<MoviesPage/>}/><Route path="/series" element={<SeriesPage/>}/><Route path="/events" element={<EventsPage/>}/><Route path="/more" element={<MorePage/>}/><Route path="*" element={<Navigate to="/" replace/>}/></Routes></main><BottomNav/></div></BrowserRouter>}
