@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase'
 import type HlsType from 'hls.js'
-import { Search, Tv, Film, Clapperboard, Trophy, MessageCircle, Send, Maximize2, Minimize2, Eye, EyeOff, Play, Radio, Menu, Sparkles, Volume2, Settings2, Globe, Star, Flame, CalendarDays, Grid2X2 } from 'lucide-react'
+import { Search, Tv, Film, Clapperboard, Trophy, MessageCircle, Send, Maximize2, Minimize2, Eye, EyeOff, Play, Radio, Menu, Sparkles, Volume2, Settings2, Globe, Star, Flame, CalendarDays } from 'lucide-react'
 
 type Episode = { id: string; title: string; season: string; episode_num?: number; container_extension?: string }
 type ChatMessage = { id: number; channel_id: string; display_name: string; message: string; created_at: string }
