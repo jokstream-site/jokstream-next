@@ -691,9 +691,9 @@ app.all('/api/stream/:token', async (req, res) => {
     const finalUrl = upstream.url || target.toString()
     const contentType = upstream.headers.get('content-type') || ''
     const isManifest =
-      /mpegurl|vnd\\.apple\\.mpegurl/i.test(contentType) ||
-      /\\.m3u8(?:$|[?#])/i.test(target.pathname) ||
-      /\\.m3u8(?:$|[?#])/i.test(new URL(finalUrl).pathname)
+      /mpegurl|vnd\.apple\.mpegurl/i.test(contentType) ||
+      /\.m3u8(?:$|[?#])/i.test(target.pathname) ||
+      /\.m3u8(?:$|[?#])/i.test(new URL(finalUrl).pathname)
 
     if (isManifest && upstream.ok) {
       const manifest = await upstream.text()
@@ -703,14 +703,14 @@ app.all('/api/stream/:token', async (req, res) => {
         if (resolved.origin !== mediaflowOrigin) return raw
         return '/api/stream/' + createPlaybackToken(resolved.toString())
       }
-      const rewritten = manifest.split(/\\r?\\n/).map(line => {
+      const rewritten = manifest.split(/\r?\n/).map(line => {
         const trimmed = line.trim()
         if (!trimmed) return line
         if (trimmed.startsWith('#')) {
           return line.replace(/URI="([^"]+)"/g, (_match, uri: string) => 'URI="' + toGatewayUrl(uri) + '"')
         }
         return toGatewayUrl(trimmed)
-      }).join('\\n')
+      }).join('\n')
 
       res.removeHeader('Content-Length')
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
