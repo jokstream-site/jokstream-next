@@ -202,7 +202,7 @@ app.get('/api/artwork/:kind', async (req, res) => {
     const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
     if (!response.ok) throw new Error('tmdb_search_failed')
     const body = await response.json() as { results?: Array<any> }
-    const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\\(\\d{4}\\)/g, ' ').replace(/\\b(19|20)\\d{2}\\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\\s+/g, ' ')
+    const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\\(\d{4}\\)/g, ' ').replace(/\\b(19|20)\d{2}\\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
     const match = (body.results || []).find(item => normalize(String(item.title || item.name || item.original_title || item.original_name || '')) === normalize(title))
     const value = match ? {
       matched: true,
@@ -224,8 +224,8 @@ app.get('/api/artwork/:kind', async (req, res) => {
 function cleanCatalogRow(row: any) {
   const name = String(row?.name || '').trim()
   const id = String(row?.item_id || row?.id || '').trim()
-  const fakeHeader = /^(?:[-=_.\\s]{3,}|.*(?:^|\\s)[-=]{3,}.*|.*[-=]{3,}$)$/.test(name)
-  const validId = /^\\d{1,20}$/.test(id)
+  const fakeHeader = /^(?:[-=_.\s]{3,}|.*(?:^|\s)[-=]{3,}.*|.*[-=]{3,}$)$/.test(name)
+  const validId = /^\d{1,20}$/.test(id)
   return Boolean(name && !fakeHeader && validId)
 }
 async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.Request) {
@@ -413,8 +413,8 @@ async function runCatalogSync() {
       for (const row of rows) {
         const id = String(row.stream_id ?? row.series_id ?? '').trim()
         const name = String(row.name ?? row.title ?? '').trim()
-        const separatorHeader = /^(?:[-=_.\\s]{3,}|.*(?:^|\\s)[-=]{3,}.*|.*[-=]{3,}$)$/.test(name)
-        if (!/^\\d{1,20}$/.test(id) || !name || separatorHeader) continue
+        const separatorHeader = /^(?:[-=_.\s]{3,}|.*(?:^|\s)[-=]{3,}.*|.*[-=]{3,}$)$/.test(name)
+        if (!/^\d{1,20}$/.test(id) || !name || separatorHeader) continue
         const rawImage = String(row.stream_icon ?? row.cover ?? row.movie_image ?? '')
         const imageUrl = /^https:/i.test(rawImage) ? rawImage.slice(0, 2048) : null
         batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4'), image_url: imageUrl })
