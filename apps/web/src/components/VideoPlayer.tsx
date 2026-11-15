@@ -141,7 +141,7 @@ export default function VideoPlayer({
     }
 
     watchdogRef.current = setTimeout(() => fail('Connection timed out (15s)'), WATCHDOG_MS)
-    const isHls = /\.m3u8(?:$|[?#])/i.test(playableUrl)
+    const isHls = streamType === 'live' || /\.m3u8(?:$|[?#])/i.test(src) || /\.m3u8(?:$|[?#])/i.test(playableUrl)
 
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({
