@@ -198,3 +198,8 @@
 .sports-library-panel .event-grid{margin-top:16px}
 .sports-library-panel .event-card{min-height:150px}
 @media(max-width:760px){.jok-home.playing-view .player-frame{min-height:240px}}
+
+.catalog-art-wrap{position:absolute;inset:0;display:grid;place-items:center;overflow:hidden;z-index:0}
+.catalog-art-fallback{display:grid;place-items:center;width:100%;height:100%;color:#d9b978;background:radial-gradient(circle at 50% 35%,#4a3a31,#171923 72%)}
+.pick-art .catalog-art-wrap{z-index:0}
+.channel-art .catalog-art-wrap{z-index:0}
