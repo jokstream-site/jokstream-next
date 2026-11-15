@@ -266,9 +266,9 @@ async function runCatalogSync() {
     const version = await supabaseRpc('jok_catalog_sync_begin', { p_token: env.CATALOG_SYNC_SECRET }) as string
     let total = 0
     const groups = [
-      { action: 'get_live_streams', categoryAction: 'get_live_categories', kind: 'live' as const, fallback: 'قنوات مباشرة' },
-      { action: 'get_vod_streams', categoryAction: 'get_vod_categories', kind: 'movie' as const, fallback: 'أفلام' },
-      { action: 'get_series', categoryAction: 'get_series_categories', kind: 'series' as const, fallback: 'مسلسلات' }
+      { action: 'get_live_streams', categoryAction: 'get_live_categories', kind: 'live' as const, fallback: 'Live TV' },
+      { action: 'get_vod_streams', categoryAction: 'get_vod_categories', kind: 'movie' as const, fallback: 'Movies' },
+      { action: 'get_series', categoryAction: 'get_series_categories', kind: 'series' as const, fallback: 'Series' }
     ]
     for (const group of groups) {
       update({ stage: group.kind + '_download', synced: total })
@@ -277,17 +277,17 @@ async function runCatalogSync() {
         xtreamFetch(apiUrl + '&action=' + group.categoryAction, 30_000)
       ])
       if (!listResponse.ok) throw new Error('provider_http_' + listResponse.status + '_' + group.kind)
-      const rows = await listResponse.json() as Array<{ stream_id?: string|number; series_id?: string|number; name?: string; title?: string; category_id?: string|number; container_extension?: string }>
+      const rows = await listResponse.json() as Array<{ stream_id?: string|number; series_id?: string|number; name?: string; title?: string; category_id?: string|number; container_extension?: string; stream_icon?: string; cover?: string; movie_image?: string }>
       const categoryRows = categoryResponse.ok ? await categoryResponse.json() as Array<{ category_id?: string|number; category_name?: string }> : []
       const categories = new Map(categoryRows.map(row => [String(row.category_id ?? ''), String(row.category_name ?? group.fallback)]))
       if (!Array.isArray(rows)) throw new Error('provider_invalid_catalog_' + group.kind)
       update({ stage: group.kind + '_saving', synced: total })
-      let batch: Array<{kind:string;item_id:string;name:string;category:string;extension:string}> = []
+      let batch: Array<{kind:string;item_id:string;name:string;category:string;extension:string;image_url:string|null}> = []
       for (const row of rows) {
         const id = String(row.stream_id ?? row.series_id ?? '')
         const name = String(row.name ?? row.title ?? '').trim()
         if (!id || !name) continue
-        batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4') })
+        const rawImage = String(row.stream_icon ?? row.cover ?? row.movie_image ?? '')\n        const imageUrl = /^https:\/\//i.test(rawImage) ? rawImage.slice(0, 2048) : null\n        batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4'), image_url: imageUrl })
         if (batch.length >= 100) {
           await supabaseRpc('jok_catalog_sync_batch', { p_token: env.CATALOG_SYNC_SECRET, p_version: version, p_items: batch })
           total += batch.length; batch = []
