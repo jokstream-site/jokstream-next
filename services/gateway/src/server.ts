@@ -40,8 +40,17 @@ app.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-7', le
 
 function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
   const token = req.header('authorization')?.replace(/^Bearer\s+/i, '')
-  if (!env.ADMIN_API_TOKEN || !token || token !== env.ADMIN_API_TOKEN) {
-    res.status(401).json({ error: 'unauthorized' }); return
+  const configured = Boolean(env.ADMIN_API_TOKEN)
+  const matches = Boolean(token && env.ADMIN_API_TOKEN && token === env.ADMIN_API_TOKEN)
+  if (!matches) {
+    console.warn('[admin-auth]', {
+      configured,
+      received: Boolean(token),
+      receivedLength: token?.length ?? 0,
+      configuredLength: env.ADMIN_API_TOKEN?.length ?? 0,
+      matches
+    })
+    res.status(401).json({ error: configured ? 'unauthorized' : 'admin_token_not_configured' }); return
   }
   next()
 }
