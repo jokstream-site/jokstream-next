@@ -9,6 +9,8 @@ const env = z.object({
   ADMIN_API_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
   ALLOWED_ORIGINS: z.string().default('http://localhost:5173'),
   XTREAM_BASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
+  XTREAM_API_BASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
+  XTREAM_PROXY_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
   XTREAM_USERNAME: z.string().optional(),
   XTREAM_PASSWORD: z.string().optional(),
   UPSTREAM_REDISTRIBUTION_AUTHORIZED: z.enum(['true', 'false']).default('false'),
@@ -21,11 +23,10 @@ let catalog: CatalogItem[] = []
 let lastSync: string | null = null
 
 async function xtreamFetch(url: string, timeoutMs: number) {
+  const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': 'okhttp/5.0.0-alpha.2' }
+  if (env.XTREAM_API_BASE_URL && env.XTREAM_PROXY_TOKEN && url.startsWith(env.XTREAM_API_BASE_URL.replace(/\/$/, ''))) headers.Authorization = 'Bearer ' + env.XTREAM_PROXY_TOKEN
   return fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': 'okhttp/5.0.0-alpha.2'
-    },
+    headers,
     signal: AbortSignal.timeout(timeoutMs)
   })
 }
@@ -81,9 +82,9 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
 
   let stage = 'account_request'
   try {
-    const base = env.XTREAM_BASE_URL.replace(/\/$/, '')
+    const base = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD })
-    const apiUrl = base + '/player_api.php?' + params.toString()
+    const apiUrl = base + '?' + params.toString()
     const response = await xtreamFetch(apiUrl, 15_000)
     if (!response.ok) {
       res.status(502).json({ error: 'provider_http_' + response.status + '_account' }); return
@@ -154,7 +155,8 @@ app.post('/api/playback', async (req, res) => {
     if (input.data.kind === 'series') {
       if (!input.data.seriesId || !catalog.some(item => item.kind === 'series' && item.id === input.data.seriesId)) return res.status(404).json({ error: 'series_not_found' })
       const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: input.data.seriesId })
-      const infoResponse = await xtreamFetch(env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php?' + params, 20_000)
+      const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+      const infoResponse = await xtreamFetch(apiBase + '?' + params, 20_000)
       if (!infoResponse.ok) throw new Error('series_info_failed')
       const info = await infoResponse.json() as { episodes?: Record<string, Array<{ id?: string | number; episode_num?: number; container_extension?: string }>> }
       const episodes = Object.values(info.episodes || {}).flat()
@@ -198,7 +200,8 @@ app.get('/api/series/:id', async (req, res) => {
   if (!catalog.some(item => item.kind === 'series' && item.id === req.params.id)) return res.status(404).json({ error: 'series_not_found' })
   try {
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: req.params.id })
-    const response = await fetch(env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php?' + params, { signal: AbortSignal.timeout(20_000) })
+    const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+    const response = await xtreamFetch(apiBase + '?' + params, 20_000)
     if (!response.ok) throw new Error('provider_error')
     res.json(await response.json())
   } catch { res.status(502).json({ error: 'series_details_unavailable' }) }
