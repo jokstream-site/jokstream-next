@@ -130,6 +130,8 @@ type SyncState = {
 }
 let syncState: SyncState = { status: 'idle', stage: 'idle', synced: 0, startedAt: null, updatedAt: null, error: null }
 
+const trimTrailingSlash = (value: string) => value.endsWith('/') ? value.slice(0, -1) : value
+
 async function runCatalogSync() {
   const update = (patch: Partial<SyncState>) => {
     syncState = { ...syncState, ...patch, updatedAt: new Date().toISOString() }
@@ -139,7 +141,7 @@ async function runCatalogSync() {
     if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) throw new Error('provider_not_configured')
 
     update({ stage: 'account_request' })
-    const base = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\\/$/, '') : env.XTREAM_BASE_URL.replace(/\\/$/, '') + '/player_api.php'
+    const base = env.XTREAM_API_BASE_URL ? trimTrailingSlash(env.XTREAM_API_BASE_URL) : trimTrailingSlash(env.XTREAM_BASE_URL) + '/player_api.php'
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD })
     const apiUrl = base + '?' + params.toString()
     const response = await xtreamFetch(apiUrl, 15_000)
