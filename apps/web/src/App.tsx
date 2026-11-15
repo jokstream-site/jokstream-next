@@ -48,16 +48,17 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!supabase || !selected.id) { setMessages([]); return }
+    const client = supabase
+    if (!client || !selected.id) { setMessages([]); return }
     let alive = true
-    supabase.from('chat_messages').select('id,channel_id,display_name,message,created_at').eq('channel_id', selected.id).order('created_at', { ascending: true }).limit(100)
+    client.from('chat_messages').select('id,channel_id,display_name,message,created_at').eq('channel_id', selected.id).order('created_at', { ascending: true }).limit(100)
       .then(({ data, error }) => { if (alive && !error) setMessages((data || []) as ChatMessage[]) })
-    const channel = supabase.channel('jokstream-chat-' + selected.id)
+    const channel = client.channel('jokstream-chat-' + selected.id)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: 'channel_id=eq.' + selected.id }, payload => {
         const incoming = payload.new as ChatMessage
         setMessages(prev => prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming].slice(-150))
       }).subscribe()
-    return () => { alive = false; void supabase.removeChannel(channel) }
+    return () => { alive = false; void client.removeChannel(channel) }
   }, [selected.id])
 
   useEffect(() => {
