@@ -25,9 +25,9 @@ function authorized(request, env, url, allowQuery = false) {
 }
 function providerStreamUrl(cfg, pathname) {
   const parts = pathname.split("/").filter(Boolean);
-  if (parts.length !== 3 || !["live", "movie", "series"].includes(parts[0])) throw new Error("Invalid stream path");
+  if (parts.length !== 3 || parts[0] !== "stream" || !["live", "movie", "series"].includes(parts[1])) throw new Error("Invalid stream path");
   if (!/^\\d{1,20}\\.[a-z0-9]{2,6}$/i.test(parts[2])) throw new Error("Invalid stream identifier");
-  return new URL("/" + parts[0] + "/" + encodeURIComponent(cfg.username) + "/" +
+  return new URL("/" + parts[1] + "/" + encodeURIComponent(cfg.username) + "/" +
     encodeURIComponent(cfg.password) + "/" + parts[2], cfg.origin);
 }
 async function proxyProvider(request, cfg, target, env) {
