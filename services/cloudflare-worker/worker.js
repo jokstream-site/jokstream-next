@@ -251,7 +251,6 @@ export default {
         return proxyProvider(request, cfg, providerStreamUrl(cfg, url.pathname), env);
       }
       if (url.pathname.startsWith("/hls/")) {
-        if (!authorized(request, env, url)) return json({ error: "Unauthorized" }, 401);
         const token = url.pathname.slice("/hls/".length);
         if (!token || token.includes("/") || token.length > 8192) return json({ error: "Invalid HLS token" }, 400);
         const target = await openHlsTarget(token, env.JOKSTREAM_PROXY_TOKEN);
