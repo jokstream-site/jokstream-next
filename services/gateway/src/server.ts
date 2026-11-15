@@ -79,7 +79,7 @@ app.get('/api/admin/provider/diagnostics', requireAdmin, async (_req, res) => {
   if (!env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) {
     res.status(503).json({ error: 'provider_credentials_not_configured' }); return
   }
-  const base = env.XTREAM_API_BASE_URL.replace(/\\/$/, '')
+  const base = env.XTREAM_API_BASE_URL.replace(/\/$/, '')
   const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD })
   const checks: Record<string, unknown> = {}
   try {
