@@ -11,10 +11,12 @@ const env = z.object({
   XTREAM_BASE_URL: z.string().url().optional(),
   XTREAM_USERNAME: z.string().optional(),
   XTREAM_PASSWORD: z.string().optional(),
-  UPSTREAM_REDISTRIBUTION_AUTHORIZED: z.enum(['true', 'false']).default('false')
+  UPSTREAM_REDISTRIBUTION_AUTHORIZED: z.enum(['true', 'false']).default('false'),
+  MEDIAFLOW_BASE_URL: z.string().url().optional(),
+  MEDIAFLOW_API_PASSWORD: z.string().min(16).optional()
 }).parse(process.env)
 
-type CatalogItem = { id: string; name: string; category: string; kind: 'live' | 'movie' | 'series' }
+type CatalogItem = { id: string; name: string; category: string; kind: 'live' | 'movie' | 'series'; extension?: string }
 let catalog: CatalogItem[] = []
 let lastSync: string | null = null
 
@@ -76,14 +78,14 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
         fetch(apiUrl + '&action=' + group.categoryAction, { signal: AbortSignal.timeout(15_000) })
       ])
       if (!listResponse.ok) throw new Error('provider_catalog_error')
-      const rows = await listResponse.json() as Array<{ stream_id?: string | number; series_id?: string | number; name?: string; title?: string; category_id?: string | number }>
+      const rows = await listResponse.json() as Array<{ stream_id?: string | number; series_id?: string | number; name?: string; title?: string; category_id?: string | number; container_extension?: string }>
       const categoryRows = categoryResponse.ok ? await categoryResponse.json() as Array<{ category_id?: string | number; category_name?: string }> : []
       const categories = new Map(categoryRows.map(row => [String(row.category_id ?? ''), String(row.category_name ?? group.fallback)]))
       if (Array.isArray(rows)) for (const row of rows) {
         const id = String(row.stream_id ?? row.series_id ?? '')
         const name = String(row.name ?? row.title ?? '').trim()
         const category = categories.get(String(row.category_id ?? '')) || group.fallback
-        if (id && name) next.push({ id, name, category, kind: group.kind })
+        if (id && name) next.push({ id, name, category, kind: group.kind, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4') })
       }
     }
     catalog = next
@@ -91,6 +93,61 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
     res.json({ synced: catalog.length, updatedAt: lastSync })
   } catch {
     res.status(502).json({ error: 'provider_sync_failed' })
+  }
+})
+
+app.post('/api/playback', async (req, res) => {
+  const input = z.object({
+    kind: z.enum(['live', 'movie', 'series']),
+    id: z.string().min(1).max(64),
+    seriesId: z.string().min(1).max(64).optional()
+  }).safeParse(req.body)
+  if (!input.success) return res.status(400).json({ error: 'invalid_playback_request' })
+  if (env.UPSTREAM_REDISTRIBUTION_AUTHORIZED !== 'true') return res.status(403).json({ error: 'redistribution_not_authorized' })
+  if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) return res.status(503).json({ error: 'provider_not_configured' })
+  if (!env.MEDIAFLOW_BASE_URL || !env.MEDIAFLOW_API_PASSWORD) return res.status(503).json({ error: 'media_proxy_not_configured' })
+
+  try {
+    let extension = input.data.kind === 'live' ? 'ts' : 'mp4'
+    if (input.data.kind === 'series') {
+      if (!input.data.seriesId || !catalog.some(item => item.kind === 'series' && item.id === input.data.seriesId)) return res.status(404).json({ error: 'series_not_found' })
+      const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: input.data.seriesId })
+      const infoResponse = await fetch(env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php?' + params, { signal: AbortSignal.timeout(20_000) })
+      if (!infoResponse.ok) throw new Error('series_info_failed')
+      const info = await infoResponse.json() as { episodes?: Record<string, Array<{ id?: string | number; episode_num?: number; container_extension?: string }>> }
+      const episodes = Object.values(info.episodes || {}).flat()
+      const episode = episodes.find(row => String(row.id ?? '') === input.data.id)
+      if (!episode) return res.status(404).json({ error: 'episode_not_found' })
+      extension = episode.container_extension || 'mp4'
+    } else {
+      const item = catalog.find(row => row.kind === input.data.kind && row.id === input.data.id)
+      if (!item) return res.status(404).json({ error: 'catalog_item_not_found' })
+      extension = item.extension || extension
+    }
+
+    const path = input.data.kind === 'live' ? 'live' : input.data.kind === 'movie' ? 'movie' : 'series'
+    const upstream = new URL('/' + path + '/' + encodeURIComponent(env.XTREAM_USERNAME) + '/' + encodeURIComponent(env.XTREAM_PASSWORD) + '/' + encodeURIComponent(input.data.id) + '.' + encodeURIComponent(extension), env.XTREAM_BASE_URL).toString()
+    const isHls = extension.toLowerCase() === 'm3u8'
+    const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\/$/, '')
+    const generated = await fetch(proxyBase + '/generate_url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mediaflow_proxy_url: proxyBase,
+        endpoint: isHls ? '/proxy/hls/manifest.m3u8' : '/proxy/stream',
+        destination_url: upstream,
+        query_params: (!isHls && ['ts', 'mkv', 'avi'].includes(extension.toLowerCase())) ? { transcode: 'true' } : {},
+        api_password: env.MEDIAFLOW_API_PASSWORD,
+        expiration: 1800
+      }),
+      signal: AbortSignal.timeout(20_000)
+    })
+    if (!generated.ok) throw new Error('mediaflow_url_generation_failed')
+    const result = await generated.json() as { url?: string }
+    if (!result.url) throw new Error('mediaflow_url_missing')
+    res.json({ url: result.url, expiresIn: 1800, kind: input.data.kind })
+  } catch {
+    res.status(502).json({ error: 'playback_url_generation_failed' })
   }
 })
 
