@@ -202,7 +202,7 @@ app.get('/api/artwork/:kind', async (req, res) => {
     const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
     if (!response.ok) throw new Error('tmdb_search_failed')
     const body = await response.json() as { results?: Array<any> }
-    const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\\(\d{4}\\)/g, ' ').replace(/\\b(19|20)\d{2}\\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+    const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
     const match = (body.results || []).find(item => normalize(String(item.title || item.name || item.original_title || item.original_name || '')) === normalize(title))
     const value = match ? {
       matched: true,
