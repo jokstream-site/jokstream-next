@@ -35,6 +35,8 @@ export default function App() {
   const [showAdmin, setShowAdmin] = useState(false)
   const [adminToken, setAdminToken] = useState('')
   const [adminMessage, setAdminMessage] = useState('')
+  const [syncBusy, setSyncBusy] = useState(false)
+  const [visibleCount, setVisibleCount] = useState(60)
 
   useEffect(() => {
     let alive = true
@@ -112,10 +114,12 @@ export default function App() {
   }
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+  useEffect(() => { setVisibleCount(60) }, [activeSection, search])
   const filteredChannels = useMemo(() => channels.filter(c => (!search.trim() || (c.name + c.category).toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) && (activeSection === 'home' || (activeSection === 'live' && c.kind === 'live') || (activeSection === 'movies' && c.kind === 'movie') || (activeSection === 'series' && c.kind === 'series') || (activeSection === 'sports' && /رياضة|sport/i.test(c.name + c.category)))), [channels, search, activeSection])
 
   async function syncCatalog(e: React.FormEvent) {
     e.preventDefault()
+    if (syncBusy) return
     const token = adminToken.trim()
     const tokenIsAscii = token.length >= 32 && Array.from(token).every(char => {
       const code = char.charCodeAt(0)
@@ -125,29 +129,51 @@ export default function App() {
       setAdminMessage('رمز الإدارة غير صالح: استخدم الرمز الإنجليزي كما هو، دون مسافات أو أحرف إضافية.')
       return
     }
-    setAdminMessage('جارٍ مزامنة مكتبة المزود…')
+    setSyncBusy(true)
+    setAdminMessage('بدأت المزامنة في الخلفية… يمكنك إبقاء الموقع مفتوحاً واستخدامه.')
     try {
-      const response = await fetch(API + '/api/admin/catalog/sync', { method: 'POST', headers: { Authorization: 'Bearer ' + token } })
-      const result = await response.json() as { synced?: number; error?: string }
-      if (!response.ok) throw new Error(result.error || 'sync_failed')
+      const headers = { Authorization: 'Bearer ' + token }
+      const response = await fetch(API + '/api/admin/catalog/sync', { method: 'POST', headers })
+      const initial = await response.json() as { status?: string; error?: string }
+      if (!response.ok) throw new Error(initial.error || 'sync_start_failed')
+      let finished = false
+      while (!finished) {
+        await new Promise(resolve => window.setTimeout(resolve, 1500))
+        const statusResponse = await fetch(API + '/api/admin/catalog/sync/status', { headers })
+        const state = await statusResponse.json() as { status?: string; stage?: string; synced?: number; error?: string }
+        if (!statusResponse.ok) throw new Error(state.error || 'sync_status_failed')
+        const stageLabels: Record<string, string> = {
+          starting: 'تهيئة المزامنة', account_request: 'التحقق من حساب المزود', account_json: 'قراءة بيانات الحساب',
+          live_download: 'تحميل القنوات المباشرة', live_processing: 'معالجة القنوات المباشرة', live_completed: 'اكتملت القنوات المباشرة',
+          movie_download: 'تحميل الأفلام', movie_processing: 'معالجة الأفلام', movie_completed: 'اكتملت الأفلام',
+          series_download: 'تحميل المسلسلات', series_processing: 'معالجة المسلسلات', series_completed: 'اكتملت المسلسلات',
+          completed: 'اكتملت المزامنة'
+        }
+        setAdminMessage((stageLabels[state.stage || ''] || 'جارٍ تنفيذ المزامنة') + ' · ' + (state.synced || 0).toLocaleString('ar'))
+        if (state.status === 'failed') throw new Error(state.error || 'sync_failed')
+        finished = state.status === 'completed'
+      }
       const refreshed = await fetch(API + '/api/catalog')
+      if (!refreshed.ok) throw new Error('catalog_refresh_failed')
       const data = await refreshed.json() as { items?: Array<{id:string;name:string;category:string;kind:'live'|'movie'|'series'}> }
       const items = (data.items || []).map(item => ({...item, detail:item.category, color:item.kind === 'live' ? 'blue' : item.kind === 'movie' ? 'rose' : 'violet'}))
       setChannels(items); setSelected(items[0] || emptySelection)
-      setAdminMessage('اكتملت المزامنة: ' + (result.synced || items.length) + ' عنصر.')
+      setAdminMessage('اكتملت المزامنة بنجاح: ' + items.length.toLocaleString('ar') + ' عنصر.')
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
       const messages: Record<string, string> = {
         unauthorized: 'رمز الإدارة غير صحيح أو غير مضبوط في Gateway.',
         provider_not_configured: 'بيانات Xtream غير مكتملة في أسرار Gateway.',
         provider_redistribution_authorization_required: 'إعداد السماح بإعادة التوزيع غير مفعّل في Gateway.',
-        provider_auth_failed: 'بيانات دخول Xtream مرفوضة أو غير صحيحة.',
-        provider_http_error: 'عنوان Xtream لا يستجيب بشكل صحيح. تحقق من Server URL.',
-        provider_catalog_error: 'تعذر جلب قوائم المحتوى من Xtream.',
-        provider_timeout: 'انتهت مهلة الاتصال بمزود Xtream.',
-        provider_connection_failed: 'تعذر الاتصال بمزود Xtream. تحقق من عنوان الخادم واتصاله.'
+        provider_auth_failed: 'بيانات دخول المزود مرفوضة أو غير صحيحة.',
+        provider_http_403_account: 'المزود رفض طلب الحساب (403).',
+        provider_http_403_live: 'المزود رفض تحميل القنوات (403).',
+        provider_http_403_movie: 'المزود رفض تحميل الأفلام (403).',
+        provider_http_403_series: 'المزود رفض تحميل المسلسلات (403).'
       }
       setAdminMessage(messages[code] || ('فشلت المزامنة (' + code + '). تحقق من إعدادات Gateway.'))
+    } finally {
+      setSyncBusy(false)
     }
   }
 
@@ -189,7 +215,7 @@ export default function App() {
           <div className="below-player"><div><span className="eyebrow">NOW SELECTED</span><h3>{selected.name}</h3></div><div className="player-tools"><button className="gold-button play-button" onClick={() => void playSelected()} disabled={!selected.id || (selected.kind === 'series' && !selectedEpisodeId)}><Play size={15} fill="currentColor"/> {playing ? 'إعادة التشغيل' : 'تشغيل الآن'}</button><button className="soft-button" onClick={() => setChatVisible(!chatVisible)}>{chatVisible ? <EyeOff size={16}/> : <Eye size={16}/>} {chatVisible ? 'إخفاء الدردشة' : 'إظهار الدردشة'}</button><button className="soft-button" onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>} {expanded ? 'تصغير المشغل' : 'تكبير المشغل'}</button></div></div>
           {selected.kind === 'series' && <div className="episode-list"><b>حلقات المسلسل</b>{episodes.length ? episodes.map(ep => <button key={ep.id} className={selectedEpisodeId === ep.id ? 'episode-chip active' : 'episode-chip'} onClick={() => { setSelectedEpisodeId(ep.id); setPlaybackUrl(''); setPlaying(false) }}>موسم {ep.season} · {ep.title}</button>) : <span>جارٍ تحميل الحلقات أو لا توجد حلقات متاحة.</span>}</div>}{playbackError && <p className="playback-error">{playbackError}</p>}
           <div className="section-heading channel-heading"><div><span className="eyebrow">PICK YOUR CHANNEL</span><h2>القنوات</h2></div><button className="text-link" onClick={() => setActiveSection('live')}>عرض الكل <span>←</span></button></div>
-          {apiStatus === 'offline' && <p className="catalog-notice">تعذر الاتصال بخدمة الكتالوج. تحقق من عنوان API.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">الخدمة متصلة، لكن بيانات Xtream لم تُضف بعد إلى أسرار الخادم.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">الكتالوج متصل. أضف إعدادات MediaFlow إلى أسرار Gateway لتفعيل التشغيل الآمن.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'جارٍ تحميل المكتبة…' : 'مكتبتك بانتظار الربط'}</b><p>ستظهر القنوات والأفلام والمسلسلات الحقيقية بعد إعداد بيانات المزود ومزامنة الكتالوج.</p></div>}<div className="channel-grid">{filteredChannels.map((channel, i) => <button key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { setSelected(channel); setPlaybackUrl(''); setPlaying(false) }}><span className={'channel-art '+channel.color}><span className="channel-number">0{i+1}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>
+          {apiStatus === 'offline' && <p className="catalog-notice">تعذر الاتصال بخدمة الكتالوج. تحقق من عنوان API.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">الخدمة متصلة، لكن بيانات Xtream لم تُضف بعد إلى أسرار الخادم.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">الكتالوج متصل. أضف إعدادات MediaFlow إلى أسرار Gateway لتفعيل التشغيل الآمن.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'جارٍ تحميل المكتبة…' : 'مكتبتك بانتظار الربط'}</b><p>ستظهر القنوات والأفلام والمسلسلات الحقيقية بعد إعداد بيانات المزود ومزامنة الكتالوج.</p></div>}<div className="channel-grid">{filteredChannels.slice(0, visibleCount).map((channel, i) => <button key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { setSelected(channel); setPlaybackUrl(''); setPlaying(false) }}><span className={'channel-art '+channel.color}><span className="channel-number">0{i+1}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>{filteredChannels.length > visibleCount && <button className="soft-button" onClick={() => setVisibleCount(count => count + 60)}>تحميل 60 عنصراً إضافياً ({(filteredChannels.length - visibleCount).toLocaleString("ar")} متبقية)</button>}
         </div>
 
         {chatVisible && <aside className="chat-panel"><div className="chat-header"><div className="chat-title"><span className="chat-icon"><MessageCircle size={17}/></span><span><b>دردشة القناة</b><small>تفاعل مع المشاهدين</small></span></div><button className="icon-button" onClick={() => setChatVisible(false)} title="إخفاء الدردشة"><EyeOff size={17}/></button></div><div className="chat-channel"><span className="live-dot"/><b>{selected.name}</b><span>محادثة عامة</span></div><div className="chat-messages">{!supabase && <div className="chat-empty"><MessageCircle size={25}/><b>الدردشة غير متصلة</b><p>أضف إعدادات Supabase في ملف البيئة لتفعيل الدردشة.</p></div>}{supabase && messages.length === 0 && <div className="chat-empty"><Sparkles size={25}/><b>ابدأ التفاعل</b><p>كن أول من يشارك في دردشة هذه القناة.</p></div>}{messages.map(m => <div className="message" key={m.id}><span className="avatar">{m.display_name.slice(0,1)}</span><div><div className="message-head"><b>{m.display_name}</b><time>{new Date(m.created_at).toLocaleTimeString('ar', {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.message}</p></div></div>)}<div ref={bottomRef}/></div>
@@ -199,7 +225,7 @@ export default function App() {
 
       <section className="discover-strip"><div className="discover-icon"><Trophy size={23}/></div><div><span className="eyebrow">COMING TO YOUR HOME</span><h3>ليلتك تستحق مشاهدة استثنائية</h3><p>سنضيف الفعاليات والمحتوى المتاح فور ربط مكتبة مزود الخدمة.</p></div><span className="discover-spark">✧</span></section>
       <footer><a className="footer-brand" href="#">JOK<span>STREAM</span></a><button className="admin-link" onClick={() => setShowAdmin(true)}>لوحة الإدارة</button><span>© {new Date().getFullYear()} JokStream. جميع الحقوق محفوظة.</span><span className="footer-status"><i/> {apiStatus === 'ready' ? 'API متصل' : apiStatus === 'offline' ? 'API غير متصل' : 'جارٍ الاتصال'}</span></footer>
-      {showAdmin && <div className="admin-backdrop" role="presentation" onClick={e => { if (e.target === e.currentTarget) setShowAdmin(false) }}><section className="admin-panel" role="dialog" aria-modal="true" aria-label="لوحة إدارة JokStream"><div className="admin-panel-head"><div><span className="eyebrow">JOKSTREAM CONTROL</span><h2>لوحة الإدارة</h2></div><button className="icon-button" onClick={() => setShowAdmin(false)}>×</button></div><p>أدخل رمز الإدارة المخزّن في أسرار Gateway لمزامنة مكتبة Xtream. لا تُحفظ القيمة في المتصفح.</p><form onSubmit={syncCatalog}><label>رمز الإدارة</label><input type="password" value={adminToken} onChange={e => setAdminToken(e.target.value)} autoComplete="off" placeholder="ADMIN_API_TOKEN"/><button className="gold-button" disabled={adminToken.length < 32}>مزامنة الكتالوج</button></form>{adminMessage && <div className="admin-message">{adminMessage}</div>}<div className="admin-hint">بيانات Server URL وUsername وPassword تُضبط من Render Environment، ولا تُكتب هنا.</div></section></div>}
+      {showAdmin && <div className="admin-backdrop" role="presentation" onClick={e => { if (e.target === e.currentTarget) setShowAdmin(false) }}><section className="admin-panel" role="dialog" aria-modal="true" aria-label="لوحة إدارة JokStream"><div className="admin-panel-head"><div><span className="eyebrow">JOKSTREAM CONTROL</span><h2>لوحة الإدارة</h2></div><button className="icon-button" onClick={() => setShowAdmin(false)}>×</button></div><p>أدخل رمز الإدارة المخزّن في أسرار Gateway لمزامنة مكتبة Xtream. لا تُحفظ القيمة في المتصفح.</p><form onSubmit={syncCatalog}><label>رمز الإدارة</label><input type="password" value={adminToken} onChange={e => setAdminToken(e.target.value)} autoComplete="off" placeholder="ADMIN_API_TOKEN"/><button className="gold-button" disabled={adminToken.length < 32 || syncBusy}>{syncBusy ? "المزامنة جارية…" : "مزامنة الكتالوج"}</button></form>{adminMessage && <div className="admin-message" aria-live="polite">{adminMessage}</div>}<div className="admin-hint">بيانات Server URL وUsername وPassword تُضبط من Render Environment، ولا تُكتب هنا.</div></section></div>}
     </main>
   </div>
 }
