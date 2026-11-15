@@ -88,7 +88,7 @@ app.get('/api/status', (_req, res) => res.json({
   redistributionAuthorized: env.UPSTREAM_REDISTRIBUTION_AUTHORIZED === 'true',
   catalogStorageConfigured: Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY && env.CATALOG_SYNC_SECRET),
   mediaProxyConfigured: Boolean(process.env.MEDIAFLOW_BASE_URL && process.env.MEDIAFLOW_API_PASSWORD),
-  updatedAt: lastSync
+  updatedAt: syncState.updatedAt
 }))
 
 app.get('/api/admin/provider/diagnostics', requireAdmin, async (_req, res) => {
