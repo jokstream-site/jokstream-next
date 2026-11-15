@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase'
-import Hls from 'hls.js'
+import type HlsType from 'hls.js'
 import { Search, Tv, Film, Clapperboard, Trophy, MessageCircle, Send, Maximize2, Minimize2, Eye, EyeOff, Play, Radio, Menu, Sparkles, Volume2, Settings2 } from 'lucide-react'
 
 type Episode = { id: string; title: string; season: string; episode_num?: number; container_extension?: string }
@@ -81,14 +81,22 @@ export default function App() {
   useEffect(() => {
     const video = videoRef.current
     if (!video || !playbackUrl) return
-    if (playbackUrl.includes('.m3u8') && Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: true, lowLatencyMode: true })
-      hls.loadSource(playbackUrl); hls.attachMedia(video)
-      hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) setPlaybackError('حدث خطأ أثناء تشغيل البث. حاول إعادة التشغيل.') })
-      return () => { hls.destroy(); video.pause(); video.removeAttribute('src'); video.load() }
-    }
-    video.src = playbackUrl
-    return () => { video.pause(); video.removeAttribute('src'); video.load() }
+    let cancelled = false
+    let hls: HlsType | null = null
+    if (playbackUrl.includes('.m3u8')) {
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = playbackUrl
+      } else {
+        void import('hls.js').then(({ default: Hls }) => {
+          if (cancelled) return
+          if (!Hls.isSupported()) { setPlaybackError('هذا المتصفح لا يدعم تشغيل HLS. جرّب متصفحاً حديثاً.'); return }
+          hls = new Hls({ enableWorker: true, lowLatencyMode: true })
+          hls.loadSource(playbackUrl); hls.attachMedia(video)
+          hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) setPlaybackError('حدث خطأ أثناء تشغيل البث. حاول إعادة التشغيل.') })
+        }).catch(() => setPlaybackError('تعذر تحميل محرك تشغيل HLS.'))
+      }
+    } else video.src = playbackUrl
+    return () => { cancelled = true; hls?.destroy(); video.pause(); video.removeAttribute('src'); video.load() }
   }, [playbackUrl])
 
   async function playSelected() {
