@@ -36,7 +36,6 @@ export default function App() {
   const [adminToken, setAdminToken] = useState('')
   const [adminMessage, setAdminMessage] = useState('')
   const [syncBusy, setSyncBusy] = useState(false)
-  const [visibleCount, setVisibleCount] = useState(60)
   const [catalogTotal, setCatalogTotal] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -51,7 +50,6 @@ export default function App() {
     if (search.trim()) params.set('q', search.trim())
     setApiStatus('loading')
     setChannels([])
-    setVisibleCount(60)
     fetch(API + '/api/catalog?' + params.toString(), { signal: controller.signal }).then(async catalogRes => {
       if (!catalogRes.ok) throw new Error('catalog unavailable')
       const catalogData = await catalogRes.json() as { items?: Array<{id:string;name:string;category:string;kind:'live'|'movie'|'series'}>; total?: number }
