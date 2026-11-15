@@ -378,6 +378,18 @@ app.post('/api/playback', async (req, res) => {
   }
 })
 
+app.get('/api/movie/:id', async (req, res) => {
+  if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) return res.status(503).json({ error: 'provider_not_configured' })
+  try {
+    const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_vod_info', vod_id: req.params.id })
+    const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+    const response = await xtreamFetch(apiBase + '?' + params, 20_000)
+    if (!response.ok) throw new Error('provider_error')
+    res.setHeader('Cache-Control', 'private, max-age=300')
+    res.json(await response.json())
+  } catch { res.status(502).json({ error: 'movie_details_unavailable' }) }
+})
+
 app.get('/api/series/:id', async (req, res) => {
   if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) return res.status(503).json({ error: 'provider_not_configured' })
   try {
