@@ -101,7 +101,6 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
         if (status !== 'SUBSCRIBED' || !active) return
         const result = await room.track({
           visitor: visitorKey,
-          nickname: nickname || 'Guest',
           joined_at: new Date().toISOString(),
         })
         if (!active) return
@@ -119,7 +118,7 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
         void supabase.removeChannel(room)
       })
     }
-  }, [channelId, visitorKey, nickname])
+  }, [channelId, visitorKey])
 
   // Load the most recent 50 messages, then listen for new messages in this room.
   useEffect(() => {
