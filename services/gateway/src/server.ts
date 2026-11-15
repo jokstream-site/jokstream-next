@@ -33,7 +33,7 @@ async function xtreamFetch(url: string, timeoutMs: number) {
 
 async function supabaseRpc(name: string, body: Record<string, unknown>) {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) throw new Error('catalog_storage_not_configured')
-  const response = await fetch(env.SUPABASE_URL.replace(/\\/$/, '') + '/rest/v1/rpc/' + name, {
+  const response = await fetch((env.SUPABASE_URL.endsWith('/') ? env.SUPABASE_URL.slice(0, -1) : env.SUPABASE_URL) + '/rest/v1/rpc/' + name, {
     method: 'POST',
     headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: 'Bearer ' + env.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
