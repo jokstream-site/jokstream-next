@@ -144,7 +144,7 @@
 .jok-home:not(.section-home) .catalog-items-heading { scroll-margin-top:100px; }
 .jok-home:not(.section-home) .channel-grid { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
 .jok-home:not(.section-home) .channel-card { text-align:left; }
-.jok-home:not(.section-home) .episode-list { display:none; }
+
 .jok-home:not(.section-home) .catalog-category-row { position:sticky; top:82px; z-index:3; background:#0b0c11f2; padding:12px 2px; }
 .jok-home:not(.section-home) .watch-main { padding-bottom:40px; }
 @media(max-width:760px) {
@@ -176,3 +176,25 @@
 .channel-number,.channel-icon,.channel-play{z-index:1}
 .pick-art>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .pick-art-symbol{z-index:1}
+
+
+/* Playback opens in-place from the selected title; never scroll to a hidden player. */
+.jok-home.playing-view .player-frame{display:block!important}
+.jok-home.playing-view .below-player{display:flex!important}
+.jok-home.playing-view .watch-main>.section-heading:first-child{display:flex!important}
+.jok-home.playing-view .watch-layout{display:grid}
+.jok-home.playing-view .watch-main{min-height:0}
+.jok-home.playing-view .player-frame{min-height:360px}
+.jok-home.section-series .episode-list{display:flex!important;flex-wrap:wrap;gap:9px}
+.jok-home.section-sports .channel-heading,
+.jok-home.section-sports .category-folder-grid,
+.jok-home.section-sports .catalog-items-heading,
+.jok-home.section-sports .channel-grid,
+.jok-home.section-sports .catalog-empty,
+.jok-home.section-sports .catalog-notice,
+.jok-home.section-sports .content-detail-panel,
+.jok-home.section-sports .soft-button{display:none!important}
+.sports-library-panel{margin:12px 0 36px}
+.sports-library-panel .event-grid{margin-top:16px}
+.sports-library-panel .event-card{min-height:150px}
+@media(max-width:760px){.jok-home.playing-view .player-frame{min-height:240px}}
