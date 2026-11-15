@@ -106,3 +106,20 @@
 .episode-discovery-card b{font-size:12px}.episode-discovery-card span{font-size:10px;color:#c4bdc4}.episode-discovery-card small{font-size:9px;color:#9b949e}
 @media(max-width:900px){.event-grid,.episode-discovery-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:520px){.event-grid,.episode-discovery-grid{grid-template-columns:1fr}.event-card{padding:13px}.episode-discovery-card img,.episode-placeholder{width:55px;height:72px;flex-basis:55px}}
+
+
+/* Playback visibility and direct-start UX */
+#jok-player{scroll-margin-top:96px;margin-top:24px}
+.watch-layout{align-items:start}
+.watch-main{display:block!important;visibility:visible!important;min-height:420px}
+.player-frame{min-height:300px}
+.player-content{z-index:1;padding:24px;max-width:90%}
+.player-content .setup-note{margin-top:17px}
+.playback-status{color:#e6c783;font-size:12px;padding:10px 13px;border:1px solid #c7a15e55;border-radius:9px;background:#c7a15e12}
+.video-player[style*="display: block"]{display:block!important}
+@media(max-width:850px){
+  .watch-layout{display:flex;flex-direction:column}
+  .watch-main{width:100%;order:0}
+  .chat-panel{width:100%;order:1;height:360px}
+  #jok-player{scroll-margin-top:78px}
+}
