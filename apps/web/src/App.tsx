@@ -33,10 +33,14 @@ export default function App() {
       if (!alive) return
       const items = (catalogData.items || []).map(item => ({...item, detail: item.category, color: item.kind === 'live' ? 'blue' : item.kind === 'movie' ? 'rose' : 'violet'}))
       setProviderConfigured(Boolean(statusData.providerConfigured)); setApiStatus('ready')
-      if (items.length) { setSelected(items[0]); setChannels(items) }
+      setChannels(items)
+      setSelected(current => items.find(item => item.id === current.id) || items[0] || current)
     }).catch(() => { if (alive) setApiStatus('offline') })
-    if (!supabase) return () => { alive = false }
+    return () => { alive = false }
+  }, [])
 
+  useEffect(() => {
+    if (!supabase || !selected.id) { setMessages([]); return }
     let alive = true
     supabase.from('chat_messages').select('id,channel_id,display_name,message,created_at').eq('channel_id', selected.id).order('created_at', { ascending: true }).limit(100)
       .then(({ data, error }) => { if (alive && !error) setMessages((data || []) as ChatMessage[]) })
