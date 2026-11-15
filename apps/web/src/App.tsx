@@ -7,11 +7,12 @@ type Episode = { id: string; title: string; season: string; episode_num?: number
 type ChatMessage = { id: number; channel_id: string; display_name: string; message: string; created_at: string }
 type Channel = { id: string; name: string; category: string; detail: string; color: string; kind: 'live'|'movie'|'series' }
 const API = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || ''
+const emptySelection: Channel = { id: '', name: 'اختر محتواك للبدء', category: 'JokStream', detail: 'المكتبة', color: 'blue', kind: 'live' }
 const sections = [{ id: 'home', label: 'الرئيسية', icon: Sparkles }, { id: 'live', label: 'البث المباشر', icon: Radio }, { id: 'movies', label: 'الأفلام', icon: Film }, { id: 'series', label: 'المسلسلات', icon: Clapperboard }, { id: 'sports', label: 'الرياضة', icon: Trophy }]
 
 export default function App() {
   const [activeSection, setActiveSection] = useState('home')
-  const [selected, setSelected] = useState<Channel>({ id: '', name: 'اختر محتواك للبدء', category: 'JokStream', detail: 'المكتبة', color: 'blue', kind: 'live' })
+  const [selected, setSelected] = useState<Channel>(emptySelection)
   const [chatVisible, setChatVisible] = useState(true)
   const [expanded, setExpanded] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
