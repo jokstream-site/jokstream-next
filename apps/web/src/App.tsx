@@ -87,7 +87,7 @@ export default function App() {
       setChannels(previous => [...previous, ...items.filter(item => !previous.some(old => old.kind === item.kind && old.id === item.id))])
       setCatalogTotal(data.total || 0)
       setHasMore(channels.length + items.length < (data.total || 0))
-    } catch { setAdminMessage('تعذر تحميل الصفحة التالية من الكتالوج.') }
+    } catch { setAdminMessage('Could not load the next catalog page.') }
     finally { setLoadingMore(false) }
   }
 
@@ -127,9 +127,9 @@ export default function App() {
     fetch(API + '/api/series/' + encodeURIComponent(selected.id)).then(async response => {
       if (!response.ok) throw new Error('series_details_unavailable')
       const info = await response.json() as { episodes?: Record<string, Array<{ id?: string|number; title?: string; episode_num?: number; container_extension?: string }>> }
-      const rows = Object.entries(info.episodes || {}).flatMap(([season, list]) => list.map(row => ({ id: String(row.id ?? ''), title: row.title || ('الحلقة ' + (row.episode_num ?? '')), season, episode_num: row.episode_num, container_extension: row.container_extension })).filter(row => row.id))
+      const rows = Object.entries(info.episodes || {}).flatMap(([season, list]) => list.map(row => ({ id: String(row.id ?? ''), title: row.title || ('Episode ' + (row.episode_num ?? '')), season, episode_num: row.episode_num, container_extension: row.container_extension })).filter(row => row.id))
       if (alive) { setEpisodes(rows); setSelectedEpisodeId(rows[0]?.id || '') }
-    }).catch(() => { if (alive) { setEpisodes([]); setPlaybackError('تعذر تحميل حلقات المسلسل.') } })
+    }).catch(() => { if (alive) { setEpisodes([]); setPlaybackError('Could not load series episodes.') } })
     return () => { alive = false }
   }, [selected.id, selected.kind])
 
@@ -144,11 +144,11 @@ export default function App() {
       } else {
         void import('hls.js').then(({ default: Hls }) => {
           if (cancelled) return
-          if (!Hls.isSupported()) { setPlaybackError('هذا المتصفح لا يدعم تشغيل HLS. جرّب متصفحاً حديثاً.'); return }
+          if (!Hls.isSupported()) { setPlaybackError('This browser does not support HLS playback. Try a modern browser.'); return }
           hls = new Hls({ enableWorker: true, lowLatencyMode: true })
           hls.loadSource(playbackUrl); hls.attachMedia(video)
-          hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) setPlaybackError('حدث خطأ أثناء تشغيل البث. حاول Play Again.') })
-        }).catch(() => setPlaybackError('تعذر تحميل محرك تشغيل HLS.'))
+          hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) setPlaybackError('A playback error occurred. Please try again.') })
+        }).catch(() => setPlaybackError('Could not load the HLS playback engine.'))
       }
     } else video.src = playbackUrl
     return () => { cancelled = true; hls?.destroy(); video.pause(); video.removeAttribute('src'); video.load() }
@@ -156,14 +156,14 @@ export default function App() {
 
   async function playSelected() {
     if (!selected.id) return
-    if (selected.kind === 'series' && !selectedEpisodeId) { setPlaybackError('اختر حلقة أولاً.'); return }
+    if (selected.kind === 'series' && !selectedEpisodeId) { setPlaybackError('Select an episode first.'); return }
     setPlaybackError(''); setPlaybackUrl('')
     try {
       const response = await fetch(API + '/api/playback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: selected.kind, id: selected.kind === 'series' ? selectedEpisodeId : selected.id, ...(selected.kind === 'series' ? { seriesId: selected.id } : {}) }) })
       const result = await response.json() as { url?: string; error?: string }
       if (!response.ok || !result.url) throw new Error(result.error || 'playback_unavailable')
       setPlaybackUrl(result.url); setPlaying(true)
-    } catch { setPlaybackError('تعذر إنشاء رابط التشغيل. تحقق من إعداد MediaFlow وبيانات المزود في أسرار الخادم.') }
+    } catch { setPlaybackError('Could not generate a playback URL. Check MediaFlow and provider settings in server secrets.') }
   }
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
@@ -191,11 +191,11 @@ export default function App() {
       return code >= 33 && code <= 126
     })
     if (!tokenIsAscii) {
-      setAdminMessage('Admin Token غير صالح: استخدم الرمز الإنجليزي كما هو، دون مسافات أو أحرف إضافية.')
+      setAdminMessage('Invalid admin token. Use the exact token without spaces or extra characters.')
       return
     }
     setSyncBusy(true)
-    setAdminMessage('بدأت المزامنة في الخلفية… يمكنك إبقاء الموقع مفتوحاً واستخدامه.')
+    setAdminMessage('Catalog sync started in the background. You can continue using the site.')
     try {
       const headers = { Authorization: 'Bearer ' + token }
       const response = await fetch(API + '/api/admin/catalog/sync', { method: 'POST', headers })
@@ -209,32 +209,32 @@ export default function App() {
         const state = await statusResponse.json() as { status?: string; stage?: string; synced?: number; error?: string }
         if (!statusResponse.ok) throw new Error(state.error || 'sync_status_failed')
         const stageLabels: Record<string, string> = {
-          starting: 'تهيئة المزامنة', account_request: 'التحقق من حساب المزود', account_json: 'قراءة بيانات الحساب',
-          live_download: 'تحميل القنوات المباشرة', live_saving: 'حفظ القنوات على دفعات', live_completed: 'اكتملت القنوات المباشرة',
-          movie_download: 'تحميل الMovies', movie_saving: 'حفظ الMovies على دفعات', movie_completed: 'اكتملت الMovies',
-          series_download: 'تحميل الSeries', series_saving: 'حفظ الSeries على دفعات', series_completed: 'اكتملت الSeries',
-          completed: 'اكتملت المزامنة'
+          starting: 'Preparing sync', account_request: 'Checking provider account', account_json: 'Reading account details',
+          live_download: 'Downloading live channels', live_saving: 'Saving live channels', live_completed: 'Live channels complete',
+          movie_download: 'Downloading movies', movie_saving: 'Saving movies', movie_completed: 'Movies complete',
+          series_download: 'Downloading series', series_saving: 'Saving series', series_completed: 'Series complete',
+          completed: 'Sync complete'
         }
         syncedTotal = state.synced || syncedTotal
-        setAdminMessage((stageLabels[state.stage || ''] || 'جارٍ تنفيذ المزامنة') + ' · ' + syncedTotal.toLocaleString('ar'))
+        setAdminMessage((stageLabels[state.stage || ''] || 'Sync in progress') + ' · ' + syncedTotal.toLocaleString('ar'))
         if (state.status === 'failed') throw new Error(state.error || 'sync_failed')
         finished = state.status === 'completed'
       }
       setCatalogReload(value => value + 1)
-      setAdminMessage('اكتملت المزامنة بنجاح: تم حفظ ' + syncedTotal.toLocaleString('ar') + ' عنصر بصورة دائمة.')
+      setAdminMessage('Sync complete بنجاح: تم حفظ ' + syncedTotal.toLocaleString('ar') + '  items permanently.')
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
       const messages: Record<string, string> = {
-        unauthorized: 'Admin Token غير صحيح أو غير مضبوط في Gateway.',
-        provider_not_configured: 'بيانات Xtream غير مكتملة في أسرار Gateway.',
-        provider_redistribution_authorization_required: 'إعداد السماح بإعادة التوزيع غير مفعّل في Gateway.',
-        provider_auth_failed: 'بيانات دخول المزود مرفوضة أو غير صحيحة.',
-        provider_http_403_account: 'المزود رفض طلب الحساب (403).',
-        provider_http_403_live: 'المزود رفض تحميل القنوات (403).',
-        provider_http_403_movie: 'المزود رفض تحميل الMovies (403).',
-        provider_http_403_series: 'المزود رفض تحميل الSeries (403).'
+        unauthorized: 'Admin token is incorrect or not configured in Gateway.',
+        provider_not_configured: 'Xtream credentials are incomplete in Gateway secrets.',
+        provider_redistribution_authorization_required: 'Redistribution authorization is not enabled in Gateway.',
+        provider_auth_failed: 'Provider credentials were rejected or are invalid.',
+        provider_http_403_account: 'Provider rejected the account request (403).',
+        provider_http_403_live: 'Provider rejected the live channel request (403).',
+        provider_http_403_movie: 'المزود رفض Downloading movies (403).',
+        provider_http_403_series: 'المزود رفض Downloading series (403).'
       }
-      setAdminMessage(messages[code] || ('فشلت المزامنة (' + code + '). تحقق من إعدادات Gateway.'))
+      setAdminMessage(messages[code] || ('Sync failed (' + code + '). Check Gateway settings.'))
     } finally {
       setSyncBusy(false)
     }
@@ -246,7 +246,7 @@ export default function App() {
     if (!message || !nickname.trim() || !supabase || !selected.id) return
     setChatError('')
     const { error } = await supabase.from('chat_messages').insert({ channel_id: selected.id, display_name: nickname.trim().slice(0, 40), message: message.slice(0, 1000) })
-    if (error) setChatError('تعذر إرسال الرسالة الآن. حاول مجدداً.')
+    if (error) setChatError('Could not send your message. Please try again.')
     else setDraft('')
   }
   function saveName(e: React.FormEvent) {
@@ -258,10 +258,10 @@ export default function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <button className="mobile-menu icon-button" aria-label="القائمة"><Menu /></button>
+      <button className="mobile-menu icon-button" aria-label="Menu"><Menu /></button>
       <a className="brand" href="#" onClick={e => {e.preventDefault();setActiveSection('home')}}><span className="brand-mark"><Play fill="currentColor" size={17}/></span><span>JOK<span className="gold">STREAM</span><small>YOUR WORLD. YOUR PLAY.</small></span></a>
       <nav className="main-nav">{sections.map(item => <button key={item.id} className={activeSection === item.id ? 'nav-link active' : 'nav-link'} onClick={() => setActiveSection(item.id)}><item.icon size={16}/>{item.label}</button>)}</nav>
-      <div className="top-actions"><label className="searchbox"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search channels, movies and series"/></label><button className="profile-button" title="الملف الشخصي">{nickname ? nickname.slice(0,1).toUpperCase() : 'ز'}</button></div>
+      <div className="top-actions"><label className="searchbox"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search channels, movies and series"/></label><button className="profile-button" title="Profile">{nickname ? nickname.slice(0,1).toUpperCase() : 'J'}</button></div>
     </header>
 
     <main className="page jok-home">
@@ -280,53 +280,53 @@ export default function App() {
         <div className="hero-pagination"><i className="active"/><i/><i/><i/></div>
       </section>
 
-      <nav className="jok-shortcuts" aria-label="أقسام المكتبة">
+      <nav className="jok-shortcuts" aria-label="Library sections">
         <button onClick={() => {setActiveSection('live');setActiveCategory('All')}}><Tv/><b>Live TV</b></button>
         <button onClick={() => {setActiveSection('movies');setActiveCategory('All')}}><Film/><b>Movies</b></button>
         <button onClick={() => {setActiveSection('series');setActiveCategory('All')}}><Clapperboard/><b>Series</b></button>
         <button onClick={() => setActiveSection('sports')}><Trophy/><b>Sports</b></button>
         <button onClick={() => {setActiveSection('home');setActiveCategory('All')}}><Globe/><b>Categories</b></button>
-        <button onClick={() => setAdminMessage('أضف العناصر إلى Favorites من صفحة تفاصيل المحتوى في التحديث القادم.')}><Star/><b>Favorites</b></button>
+        <button onClick={() => setAdminMessage('Favorites will be available in a future update.')}><Star/><b>Favorites</b></button>
       </nav>
 
       <section className="jok-section">
         <div className="jok-section-head"><div><span className="eyebrow">DISCOVER YOUR LIBRARY</span><h2><Flame/> Picked for you</h2></div><span className="jok-section-note">Real titles from your synced catalog</span></div>
         <div className="jok-picks-grid">
-          {libraryPicks.slice(0,4).map((item,index)=><button key={item.kind+'-'+item.id} className={'jok-pick-card pick-'+index} onClick={()=>{setSelected(item);setActiveSection(item.kind==='movie'?'movies':'series');document.getElementById('jok-player')?.scrollIntoView({behavior:'smooth'})}}><span className="pick-art"><span className="pick-art-symbol">{item.kind==='movie'?<Film size={34}/>:<Clapperboard size={34}/>}</span><span className="pick-kind">{item.kind==='movie'?'فيلم':'مسلسل'}</span><span className="pick-play"><Play fill="currentColor" size={17}/></span></span><span className="pick-info"><b>{item.name}</b><small>{item.category}</small></span></button>)}
-          {libraryPicks.length===0 && <div className="jok-no-picks">ستظهر هنا عناوين مكتبتك بعد تحميل الكتالوج.</div>}
+          {libraryPicks.slice(0,4).map((item,index)=><button key={item.kind+'-'+item.id} className={'jok-pick-card pick-'+index} onClick={()=>{setSelected(item);setActiveSection(item.kind==='movie'?'movies':'series');document.getElementById('jok-player')?.scrollIntoView({behavior:'smooth'})}}><span className="pick-art"><span className="pick-art-symbol">{item.kind==='movie'?<Film size={34}/>:<Clapperboard size={34}/>}</span><span className="pick-kind">{item.kind==='movie'?'Movie':'Series'}</span><span className="pick-play"><Play fill="currentColor" size={17}/></span></span><span className="pick-info"><b>{item.name}</b><small>{item.category}</small></span></button>)}
+          {libraryPicks.length===0 && <div className="jok-no-picks">Your library titles will appear here when the catalog loads.</div>}
         </div>
       </section>
 
       <section className="jok-section"><div className="jok-section-head"><div><span className="eyebrow">SPORTS DATA · SPORTScore</span><h2><Trophy/> Upcoming Sports</h2></div><span className="jok-section-note">Football · Basketball · Tennis · Cricket</span></div><div className="event-grid">{(discovery.sports || []).slice(0,8).map((event:any)=><article className="event-card" key={event.id}><span className="event-sport">{event.sport}</span><b>{event.title}</b><small>{event.competition || 'Fixture'}</small><time><Clock size={13}/> {new Date(event.startsAt).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</time><span className="event-channel-unverified">Broadcast channel not verified</span></article>)}</div><a className="source-credit" href="https://sportscore.com/" target="_blank" rel="noreferrer">Powered by SportScore</a></section>
 <section className="jok-section"><div className="jok-section-head"><div><span className="eyebrow">TVMAZE · EPISODE SCHEDULE</span><h2><Clapperboard/> New Episodes</h2></div></div><div className="episode-discovery-grid">{(discovery.episodes || []).slice(0,8).map((ep:any)=><article className="episode-discovery-card" key={ep.id}>{ep.image ? <img src={ep.image} alt="" loading="lazy"/> : <div className="episode-placeholder"><Clapperboard/></div>}<div><b>{ep.show}</b><span>{ep.title}</span><small>{new Date(ep.startsAt).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</small></div></article>)}</div><a className="source-credit" href="https://www.tvmaze.com/" target="_blank" rel="noreferrer">TV schedule by TVmaze · CC BY-SA</a></section><section className="jok-sports-banner">
-        <div className="sports-emblem"><Trophy size={35}/></div><div><span className="eyebrow">SPORTS CENTER</span><h3>مركز الأحداث الرياضية</h3><p>واجهة جاهزة لعرض المباريات القادمة وربطها بالقنوات الناقلة عند توصيل مصدر مواعيد ونتائج موثوق.</p></div><span className="sports-status">بانتظار مصدر المباريات</span>
+        <div className="sports-emblem"><Trophy size={35}/></div><div><span className="eyebrow">SPORTS CENTER</span><h3>Sports Center</h3><p>Upcoming events will appear here from connected sports data sources.</p></div><span className="sports-status">Waiting for event data</span>
       </section>
 
-      <section className="welcome-row"><div><div className="eyebrow"><span className="live-dot"/> تجربة مشاهدة مختلفة</div><h1>كل ما تحب، <span>في مكان واحد.</span></h1><p>اكتشف عالمك الترفيهي واستمتع بالمشاهدة بطريقتك.</p></div><div className="welcome-art"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="art-play"><Play fill="currentColor" size={30}/></div><span className="art-star">✦</span></div></section>
+      <section className="welcome-row"><div><div className="eyebrow"><span className="live-dot"/> A better way to watch</div><h1>Everything you love, <span>in one place.</span></h1><p>Explore your entertainment world and watch your way.</p></div><div className="welcome-art"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="art-play"><Play fill="currentColor" size={30}/></div><span className="art-star">✦</span></div></section>
 
       <section id="jok-player" className={expanded ? 'watch-layout expanded' : 'watch-layout'}>
         <div className="watch-main">
-          <div className="section-heading"><div><span className="eyebrow">LIVE EXPERIENCE</span><h2>Watch Now</h2></div><span className="quality-pill"><span className="live-dot"/> مباشر</span></div>
+          <div className="section-heading"><div><span className="eyebrow">LIVE EXPERIENCE</span><h2>Watch Now</h2></div><span className="quality-pill"><span className="live-dot"/> LIVE</span></div>
           <div className="player-frame">
-            <div className="player-glow"/><video ref={videoRef} className="video-player" controls playsInline style={{ display: playbackUrl ? 'block' : 'none' }} /><div className="player-content" style={{ display: playbackUrl ? 'none' : 'flex' }}><div className="player-emblem"><Play fill="currentColor" size={28}/></div><span className="player-overline">JOKSTREAM PLAYER</span><h3>{selected.name}</h3><p>سيظهر البث بعد ربط وسيط البث المعتمد.</p><span className="setup-note"><Settings2 size={14}/> المشغل جاهز للربط بالوسيط</span></div>
+            <div className="player-glow"/><video ref={videoRef} className="video-player" controls playsInline style={{ display: playbackUrl ? 'block' : 'none' }} /><div className="player-content" style={{ display: playbackUrl ? 'none' : 'flex' }}><div className="player-emblem"><Play fill="currentColor" size={28}/></div><span className="player-overline">JOKSTREAM PLAYER</span><h3>{selected.name}</h3><p>Your stream will appear here when the secure playback proxy is ready.</p><span className="setup-note"><Settings2 size={14}/> Secure player ready</span></div>
             <div className="player-topline"><span className="player-live"><i/> LIVE</span><span className="player-watermark">JOKSTREAM</span></div>
-            <div className="player-controls"><div className="now-playing"><span className="mini-channel"><Tv size={16}/></span><span><b>{selected.name}</b><small>{selected.detail}</small></span></div><div className="control-actions"><button className="player-control" title="الصوت"><Volume2 size={18}/></button><button className="player-control" title={expanded ? 'تصغير المشغل' : 'تكبير المشغل'} onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button></div></div>
+            <div className="player-controls"><div className="now-playing"><span className="mini-channel"><Tv size={16}/></span><span><b>{selected.name}</b><small>{selected.detail}</small></span></div><div className="control-actions"><button className="player-control" title="Volume"><Volume2 size={18}/></button><button className="player-control" title={expanded ? 'Exit fullscreen' : 'Fullscreen'} onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button></div></div>
           </div>
-          <div className="below-player"><div><span className="eyebrow">NOW SELECTED</span><h3>{selected.name}</h3></div><div className="player-tools"><button className="gold-button play-button" onClick={() => void playSelected()} disabled={!selected.id || (selected.kind === 'series' && !selectedEpisodeId)}><Play size={15} fill="currentColor"/> {playing ? 'Play Again' : 'Play Now'}</button><button className="soft-button" onClick={() => setChatVisible(!chatVisible)}>{chatVisible ? <EyeOff size={16}/> : <Eye size={16}/>} {chatVisible ? 'Hide Chat' : 'Show Chat'}</button><button className="soft-button" onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>} {expanded ? 'تصغير المشغل' : 'تكبير المشغل'}</button></div></div>
-          {selected.kind === 'series' && <div className="episode-list"><b>حلقات المسلسل</b>{episodes.length ? episodes.map(ep => <button key={ep.id} className={selectedEpisodeId === ep.id ? 'episode-chip active' : 'episode-chip'} onClick={() => { setSelectedEpisodeId(ep.id); setPlaybackUrl(''); setPlaying(false) }}>موسم {ep.season} · {ep.title}</button>) : <span>جارٍ تحميل الحلقات أو لا توجد حلقات متاحة.</span>}</div>}{playbackError && <p className="playback-error">{playbackError}</p>}
-          <div className="section-heading channel-heading"><div><span className="eyebrow">BROWSE THE CATALOG</span><h2>الكتالوج وCategories</h2></div><button className="text-link" onClick={() => {setActiveSection('live');setActiveCategory('All')}}>All Channels <span>←</span></button></div>
+          <div className="below-player"><div><span className="eyebrow">NOW SELECTED</span><h3>{selected.name}</h3></div><div className="player-tools"><button className="gold-button play-button" onClick={() => void playSelected()} disabled={!selected.id || (selected.kind === 'series' && !selectedEpisodeId)}><Play size={15} fill="currentColor"/> {playing ? 'Play Again' : 'Play Now'}</button><button className="soft-button" onClick={() => setChatVisible(!chatVisible)}>{chatVisible ? <EyeOff size={16}/> : <Eye size={16}/>} {chatVisible ? 'Hide Chat' : 'Show Chat'}</button><button className="soft-button" onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>} {expanded ? 'Exit fullscreen' : 'Fullscreen'}</button></div></div>
+          {selected.kind === 'series' && <div className="episode-list"><b>Series episodes</b>{episodes.length ? episodes.map(ep => <button key={ep.id} className={selectedEpisodeId === ep.id ? 'episode-chip active' : 'episode-chip'} onClick={() => { setSelectedEpisodeId(ep.id); setPlaybackUrl(''); setPlaying(false) }}>Season {ep.season} · {ep.title}</button>) : <span>Loading episodes or no episodes are available.</span>}</div>}{playbackError && <p className="playback-error">{playbackError}</p>}
+          <div className="section-heading channel-heading"><div><span className="eyebrow">BROWSE THE CATALOG</span><h2>Catalog & Categories</h2></div><button className="text-link" onClick={() => {setActiveSection('live');setActiveCategory('All')}}>All Channels <span>←</span></button></div>
           <div className="catalog-category-row">{categoryNames.map(category=><button key={category} className={activeCategory===category?'category-chip active':'category-chip'} onClick={()=>setActiveCategory(category)}>{category}</button>)}</div>
-          {apiStatus === 'offline' && <p className="catalog-notice">تعذر الاتصال بخدمة الكتالوج. تحقق من عنوان API.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">الخدمة متصلة، لكن بيانات Xtream لم تُضف بعد إلى أسرار الخادم.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">الكتالوج متصل. أضف إعدادات MediaFlow إلى أسرار Gateway لتفعيل التشغيل الآمن.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'جارٍ تحميل المكتبة…' : 'مكتبتك بانتظار الربط'}</b><p>لا توجد عناصر في هذا القسم أو التصنيف حالياً. جرّب تصنيفاً آخر أو امسح البحث.</p></div>}<div className="channel-grid">{filteredChannels.map((channel, i) => <button key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { setSelected(channel); setPlaybackUrl(''); setPlaying(false) }}><span className={'channel-art '+channel.color}><span className="channel-number">0{i+1}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>{hasMore && <button className="soft-button" onClick={() => void loadMoreCatalog()} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load 60 more items'} · {(Math.max(0, catalogTotal - channels.length)).toLocaleString('ar')} متبقية</button>}
+          {apiStatus === 'offline' && <p className="catalog-notice">Could not connect to the catalog service. Check the API URL.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">Service connected, but Xtream credentials are missing from server secrets.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">Catalog connected. Configure MediaFlow in Gateway secrets to enable secure playback.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'Loading library…' : 'Your library is ready'}</b><p>No items found in this section. Try another category or clear your search.</p></div>}<div className="channel-grid">{filteredChannels.map((channel, i) => <button key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { setSelected(channel); setPlaybackUrl(''); setPlaying(false) }}><span className={'channel-art '+channel.color}><span className="channel-number">0{i+1}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>{hasMore && <button className="soft-button" onClick={() => void loadMoreCatalog()} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load 60 more items'} · {(Math.max(0, catalogTotal - channels.length)).toLocaleString('ar')} متبقية</button>}
         </div>
 
-        {chatVisible && <aside className="chat-panel"><div className="chat-header"><div className="chat-title"><span className="chat-icon"><MessageCircle size={17}/></span><span><b>Live Chat</b><small>تفاعل مع المشاهدين</small></span></div><button className="icon-button" onClick={() => setChatVisible(false)} title="Hide Chat"><EyeOff size={17}/></button></div><div className="chat-channel"><span className="live-dot"/><b>{selected.name}</b><span>محادثة عامة</span></div><div className="chat-messages">{!supabase && <div className="chat-empty"><MessageCircle size={25}/><b>الدردشة غير متصلة</b><p>أضف إعدادات Supabase في ملف البيئة لتفعيل الدردشة.</p></div>}{supabase && messages.length === 0 && <div className="chat-empty"><Sparkles size={25}/><b>ابدأ التفاعل</b><p>كن أول من يشارك في دردشة هذه القناة.</p></div>}{messages.map(m => <div className="message" key={m.id}><span className="avatar">{m.display_name.slice(0,1)}</span><div><div className="message-head"><b>{m.display_name}</b><time>{new Date(m.created_at).toLocaleTimeString('ar', {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.message}</p></div></div>)}<div ref={bottomRef}/></div>
-          {!nickname ? <form className="nickname-form" onSubmit={saveName}><label>Choose a display name</label><input value={nameInput} onChange={e => setNameInput(e.target.value)} maxLength={40} placeholder="اسم العرض"/><button className="gold-button" disabled={!nameInput.trim()}>Join Chat</button></form> : <form className="chat-compose" onSubmit={sendMessage}><input value={draft} onChange={e => setDraft(e.target.value)} maxLength={1000} placeholder={'اكتب رسالة باسم '+nickname}/><button aria-label="إرسال" disabled={!draft.trim() || !supabase || !selected.id}><Send size={17}/></button></form>}
-          {chatError && <p className="chat-error">{chatError}</p>}<div className="chat-foot">كن لطيفاً واستمتع بالمشاهدة <span>✦</span></div></aside>}
+        {chatVisible && <aside className="chat-panel"><div className="chat-header"><div className="chat-title"><span className="chat-icon"><MessageCircle size={17}/></span><span><b>Live Chat</b><small>Chat with viewers</small></span></div><button className="icon-button" onClick={() => setChatVisible(false)} title="Hide Chat"><EyeOff size={17}/></button></div><div className="chat-channel"><span className="live-dot"/><b>{selected.name}</b><span>Public chat</span></div><div className="chat-messages">{!supabase && <div className="chat-empty"><MessageCircle size={25}/><b>Chat is offline</b><p>Configure Supabase to enable chat.</p></div>}{supabase && messages.length === 0 && <div className="chat-empty"><Sparkles size={25}/><b>Start chatting</b><p>Be the first to join this channel chat.</p></div>}{messages.map(m => <div className="message" key={m.id}><span className="avatar">{m.display_name.slice(0,1)}</span><div><div className="message-head"><b>{m.display_name}</b><time>{new Date(m.created_at).toLocaleTimeString('ar', {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.message}</p></div></div>)}<div ref={bottomRef}/></div>
+          {!nickname ? <form className="nickname-form" onSubmit={saveName}><label>Choose a display name</label><input value={nameInput} onChange={e => setNameInput(e.target.value)} maxLength={40} placeholder="Display name"/><button className="gold-button" disabled={!nameInput.trim()}>Join Chat</button></form> : <form className="chat-compose" onSubmit={sendMessage}><input value={draft} onChange={e => setDraft(e.target.value)} maxLength={1000} placeholder={'Message as  '+nickname}/><button aria-label="Send" disabled={!draft.trim() || !supabase || !selected.id}><Send size={17}/></button></form>}
+          {chatError && <p className="chat-error">{chatError}</p>}<div className="chat-foot">Be kind and enjoy watching. <span>✦</span></div></aside>}
       </section>
 
-      <section className="discover-strip"><div className="discover-icon"><CalendarDays size={23}/></div><div><span className="eyebrow">SMART SPORTS & EDITORIAL</span><h3>ملصقات المباريات والعروض الذكية</h3><p>سيتم توليدها تلقائياً بعد ربط تقويم رياضي ومعلومات القنوات الناقلة ومصادر بوسترات المحتوى.</p></div><span className="discover-spark">✧</span></section>
-      <footer><a className="footer-brand" href="#">JOK<span>STREAM</span></a><button className="admin-link" onClick={() => setShowAdmin(true)}>Admin Dashboard</button><span>© {new Date().getFullYear()} JokStream. جميع الحقوق محفوظة.</span><span className="footer-status"><i/> {apiStatus === 'ready' ? 'API متصل' : apiStatus === 'offline' ? 'API غير متصل' : 'جارٍ الاتصال'}</span></footer>
-      {showAdmin && <div className="admin-backdrop" role="presentation" onClick={e => { if (e.target === e.currentTarget) setShowAdmin(false) }}><section className="admin-panel" role="dialog" aria-modal="true" aria-label="لوحة إدارة JokStream"><div className="admin-panel-head"><div><span className="eyebrow">JOKSTREAM CONTROL</span><h2>Admin Dashboard</h2></div><button className="icon-button" onClick={() => setShowAdmin(false)}>×</button></div><p>أدخل Admin Token المخزّن في أسرار Gateway لمزامنة مكتبة Xtream. لا تُحفظ القيمة في المتصفح.</p><form onSubmit={syncCatalog}><label>Admin Token</label><input type="password" value={adminToken} onChange={e => setAdminToken(e.target.value)} autoComplete="off" placeholder="ADMIN_API_TOKEN"/><button className="gold-button" disabled={adminToken.length < 32 || syncBusy}>{syncBusy ? "المزامنة جارية…" : "Sync Catalog"}</button></form>{adminMessage && <div className="admin-message" aria-live="polite">{adminMessage}</div>}<div className="admin-hint">بيانات Server URL وUsername وPassword تُضبط من Render Environment، ولا تُكتب هنا.</div></section></div>}
+      <section className="discover-strip"><div className="discover-icon"><CalendarDays size={23}/></div><div><span className="eyebrow">SMART SPORTS & EDITORIAL</span><h3>Smart events and new releases</h3><p>Live events and new episodes are sourced from connected free feeds.</p></div><span className="discover-spark">✧</span></section>
+      <footer><a className="footer-brand" href="#">JOK<span>STREAM</span></a><button className="admin-link" onClick={() => setShowAdmin(true)}>Admin Dashboard</button><span>© {new Date().getFullYear()} JokStream. All rights reserved.</span><span className="footer-status"><i/> {apiStatus === 'ready' ? 'API online' : apiStatus === 'offline' ? 'API offline' : 'Connecting'}</span></footer>
+      {showAdmin && <div className="admin-backdrop" role="presentation" onClick={e => { if (e.target === e.currentTarget) setShowAdmin(false) }}><section className="admin-panel" role="dialog" aria-modal="true" aria-label="JokStream Admin"><div className="admin-panel-head"><div><span className="eyebrow">JOKSTREAM CONTROL</span><h2>Admin Dashboard</h2></div><button className="icon-button" onClick={() => setShowAdmin(false)}>×</button></div><p>Enter the admin token stored in Gateway secrets to sync your Xtream library. It is not saved in your browser.</p><form onSubmit={syncCatalog}><label>Admin Token</label><input type="password" value={adminToken} onChange={e => setAdminToken(e.target.value)} autoComplete="off" placeholder="ADMIN_API_TOKEN"/><button className="gold-button" disabled={adminToken.length < 32 || syncBusy}>{syncBusy ? "Syncing…" : "Sync Catalog"}</button></form>{adminMessage && <div className="admin-message" aria-live="polite">{adminMessage}</div>}<div className="admin-hint">Provider credentials are configured in Render Environment. Do not enter them here.</div></section></div>}
     </main>
   </div>
 }
