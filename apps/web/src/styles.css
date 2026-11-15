@@ -169,3 +169,10 @@
 .content-detail-meta{display:flex;flex-wrap:wrap;gap:8px}
 .content-detail-meta span{font-size:10px;padding:6px 9px;border:1px solid #ffffff1b;border-radius:20px;color:#e0c68f;background:#ffffff08}
 @media(max-width:600px){.category-folder-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.category-folder-grid .category-chip{min-height:68px;padding:10px}.content-detail-panel{gap:13px;padding:13px}.content-detail-poster{width:100px;height:145px;flex-basis:100px}.content-detail-copy h2{font-size:18px}.content-detail-copy p{font-size:11px}}
+
+.catalog-art-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
+.channel-art{position:relative;overflow:hidden}
+.channel-art:after{content:'';position:absolute;inset:0;background:linear-gradient(0deg,#08090dcc,transparent 68%);pointer-events:none}
+.channel-number,.channel-icon,.channel-play{z-index:1}
+.pick-art>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.pick-art-symbol{z-index:1}
