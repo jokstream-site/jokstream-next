@@ -183,7 +183,7 @@ export default function VideoPlayer({
       })
       player.attachMediaElement(video)
       player.load()
-      if (autoPlay) void player.play().catch(() => setPaused(true))
+      if (autoPlay) void Promise.resolve(player.play()).catch(() => setPaused(true))
     } else if (isMpegTs) {
       fail('MPEG-TS playback is not supported by this browser')
     } else if (isHls && Hls.isSupported()) {
