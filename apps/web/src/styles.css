@@ -123,3 +123,31 @@
   .chat-panel{width:100%;order:1;height:360px}
   #jok-player{scroll-margin-top:78px}
 }
+
+
+/* Section-first navigation: show one library view instead of scrolling through the homepage. */
+.jok-home:not(.section-home) > .jok-hero,
+.jok-home:not(.section-home) > .jok-shortcuts,
+.jok-home:not(.section-home) > .jok-section,
+.jok-home:not(.section-home) > .jok-sports-banner,
+.jok-home:not(.section-home) > .welcome-row,
+.jok-home:not(.section-home) > .discover-strip { display:none !important; }
+.jok-home:not(.section-home) #jok-player { margin-top:26px; scroll-margin-top:100px; }
+.jok-home:not(.section-home) .player-frame,
+.jok-home:not(.section-home) .below-player,
+.jok-home:not(.section-home) .watch-main > .section-heading:first-child,
+.jok-home:not(.section-home) .player-tools,
+.jok-home:not(.section-home) .chat-panel { display:none !important; }
+.jok-home:not(.section-home) .watch-layout { display:block; }
+.jok-home:not(.section-home) .watch-main { width:100%; min-height:0; }
+.jok-home:not(.section-home) .channel-heading { margin-top:0; }
+.jok-home:not(.section-home) .catalog-items-heading { scroll-margin-top:100px; }
+.jok-home:not(.section-home) .channel-grid { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
+.jok-home:not(.section-home) .channel-card { text-align:left; }
+.jok-home:not(.section-home) .episode-list { display:none; }
+.jok-home:not(.section-home) .catalog-category-row { position:sticky; top:82px; z-index:3; background:#0b0c11f2; padding:12px 2px; }
+.jok-home:not(.section-home) .watch-main { padding-bottom:40px; }
+@media(max-width:760px) {
+ .jok-home:not(.section-home) .catalog-category-row { top:70px; }
+ .jok-home:not(.section-home) .channel-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
