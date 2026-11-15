@@ -41,7 +41,7 @@ function formatTime(seconds: number) {
 }
 
 export default function VideoPlayer({
-  src, title, autoPlay = true, className = '', onClose, onStateChange,
+  src, title, autoPlay = true, className = '', onStateChange,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
