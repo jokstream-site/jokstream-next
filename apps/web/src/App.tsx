@@ -174,6 +174,7 @@ export default function App() {
       const initial = await response.json() as { status?: string; error?: string }
       if (!response.ok) throw new Error(initial.error || 'sync_start_failed')
       let finished = false
+      let syncedTotal = 0
       while (!finished) {
         await new Promise(resolve => window.setTimeout(resolve, 1500))
         const statusResponse = await fetch(API + '/api/admin/catalog/sync/status', { headers })
@@ -186,12 +187,13 @@ export default function App() {
           series_download: 'تحميل المسلسلات', series_saving: 'حفظ المسلسلات على دفعات', series_completed: 'اكتملت المسلسلات',
           completed: 'اكتملت المزامنة'
         }
-        setAdminMessage((stageLabels[state.stage || ''] || 'جارٍ تنفيذ المزامنة') + ' · ' + (state.synced || 0).toLocaleString('ar'))
+        syncedTotal = state.synced || syncedTotal
+        setAdminMessage((stageLabels[state.stage || ''] || 'جارٍ تنفيذ المزامنة') + ' · ' + syncedTotal.toLocaleString('ar'))
         if (state.status === 'failed') throw new Error(state.error || 'sync_failed')
         finished = state.status === 'completed'
       }
       setCatalogReload(value => value + 1)
-      setAdminMessage('اكتملت المزامنة بنجاح: تم حفظ ' + (state.synced || 0).toLocaleString('ar') + ' عنصر بصورة دائمة.')
+      setAdminMessage('اكتملت المزامنة بنجاح: تم حفظ ' + syncedTotal.toLocaleString('ar') + ' عنصر بصورة دائمة.')
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
       const messages: Record<string, string> = {
