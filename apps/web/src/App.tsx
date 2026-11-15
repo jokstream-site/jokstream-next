@@ -143,20 +143,28 @@ export default function App() {
     setPlaybackUrl(''); setPlaybackError(''); setPlaying(false); setContentDetails(null)
     if (!selected.id) { setEpisodes([]); setSelectedEpisodeId(''); return }
     let alive = true
+    const loadCinemeta = async () => {
+      try {
+        const response = await fetch(API + '/api/metadata/' + selected.kind + '?title=' + encodeURIComponent(selected.name))
+        if (!response.ok) return
+        const data = await response.json() as { matched?: boolean; meta?: Record<string, any> }
+        if (alive && data.matched && data.meta) setContentDetails(data.meta)
+      } catch { /* provider details remain the primary source */ }
+    }
     if (selected.kind === 'series') {
       fetch(API + '/api/series/' + encodeURIComponent(selected.id)).then(async response => {
         if (!response.ok) throw new Error('series_details_unavailable')
         const info = await response.json() as { info?: Record<string, any>; episodes?: Record<string, Array<{ id?: string|number; title?: string; episode_num?: number; container_extension?: string }>> }
         const rows = Object.entries(info.episodes || {}).flatMap(([season, list]) => list.map(row => ({ id: String(row.id ?? ''), title: row.title || ('Episode ' + (row.episode_num ?? '')), season, episode_num: row.episode_num, container_extension: row.container_extension })).filter(row => row.id))
-        if (alive) { setContentDetails(info.info || {}); setEpisodes(rows); setSelectedEpisodeId(rows[0]?.id || '') }
-      }).catch(() => { if (alive) { setEpisodes([]); setContentDetails(null) } })
+        if (alive) { setContentDetails(info.info || {}); setEpisodes(rows); setSelectedEpisodeId(rows[0]?.id || ''); if (!info.info?.plot && !info.info?.cover && !info.info?.cover_big) void loadCinemeta() }
+      }).catch(() => { if (alive) { setEpisodes([]); setContentDetails(null); void loadCinemeta() } })
     } else if (selected.kind === 'movie') {
       setEpisodes([]); setSelectedEpisodeId('')
       fetch(API + '/api/movie/' + encodeURIComponent(selected.id)).then(async response => {
         if (!response.ok) throw new Error('movie_details_unavailable')
         const info = await response.json()
-        if (alive) setContentDetails(info.info || info.movie_data || info)
-      }).catch(() => { if (alive) setContentDetails(null) })
+        if (alive) { const details = info.info || info.movie_data || info; setContentDetails(details); if (!details?.plot && !details?.movie_image && !details?.cover) void loadCinemeta() }
+      }).catch(() => { if (alive) { setContentDetails(null); void loadCinemeta() } })
     } else { setEpisodes([]); setSelectedEpisodeId('') }
     return () => { alive = false }
   }, [selected.id, selected.kind])
@@ -368,10 +376,10 @@ export default function App() {
             {discovery.sports?.length ? <div className="event-grid">{discovery.sports.map((event:any)=><article className="event-card" key={event.id}><span className="event-sport">{event.sport}</span><b>{event.title}</b><small>{event.competition || 'Fixture'}</small><time><Clock size={13}/> {new Date(event.startsAt).toLocaleString('en-US',{dateStyle:'medium',timeStyle:'short'})}</time><span className="event-channel-unverified">Broadcast channel not verified</span></article>)}</div> : <div className="catalog-empty"><b>No upcoming fixtures returned</b><p>The sports feed has no scheduled events at the moment.</p></div>}
             <a className="source-credit" href="https://sportscore.com/" target="_blank" rel="noreferrer">Powered by SportScore</a></section>}
           {selected.id && ((activeSection === 'live' && selected.kind === 'live') || (activeSection === 'movies' && selected.kind === 'movie') || (activeSection === 'series' && selected.kind === 'series')) && <section className="content-detail-panel">
-            {contentDetails?.movie_image || contentDetails?.cover || contentDetails?.cover_big || selected.image_url ? <img className="content-detail-poster" src={contentDetails?.movie_image || contentDetails?.cover_big || contentDetails?.cover || selected.image_url} alt={selected.name} loading="lazy"/> : <div className="content-detail-poster content-detail-placeholder">{selected.kind === 'movie' ? <Film size={34}/> : selected.kind === 'series' ? <Clapperboard size={34}/> : <Tv size={34}/>}</div>}
+            {contentDetails?.movie_image || contentDetails?.cover || contentDetails?.cover_big || contentDetails?.poster || selected.image_url ? <img className="content-detail-poster" src={contentDetails?.movie_image || contentDetails?.cover_big || contentDetails?.cover || contentDetails?.poster || selected.image_url} alt={selected.name} loading="lazy"/> : <div className="content-detail-poster content-detail-placeholder">{selected.kind === 'movie' ? <Film size={34}/> : selected.kind === 'series' ? <Clapperboard size={34}/> : <Tv size={34}/>}</div>}
             <div className="content-detail-copy"><span className="eyebrow">{selected.kind.toUpperCase()} · {selected.category}</span><h2>{selected.name}</h2>
-              {contentDetails?.plot && <p>{contentDetails.plot}</p>}
-              <div className="content-detail-meta">{[contentDetails?.released || contentDetails?.releaseDate, contentDetails?.genre, contentDetails?.rating ? '★ ' + contentDetails.rating : '', contentDetails?.duration].filter(Boolean).map((value:any,index:number)=><span key={index}>{String(value)}</span>)}</div>
+              {(contentDetails?.plot || contentDetails?.description) && <p>{contentDetails.plot || contentDetails.description}</p>}
+              <div className="content-detail-meta">{[contentDetails?.released || contentDetails?.releaseDate || contentDetails?.releaseInfo, contentDetails?.genre || contentDetails?.genres?.join(' · '), contentDetails?.rating || contentDetails?.imdbRating ? '★ ' + (contentDetails.rating || contentDetails.imdbRating) : '', contentDetails?.duration || contentDetails?.runtime].filter(Boolean).map((value:any,index:number)=><span key={index}>{String(value)}</span>)}</div>
               {contentDetails?.cast && <small>Cast: {contentDetails.cast}</small>}
               <button className="gold-button play-button" onClick={() => void playSelected()} disabled={playbackLoading || (selected.kind === 'series' && !selectedEpisodeId)}><Play size={15} fill="currentColor"/> {playbackLoading ? 'Starting…' : 'Play Now'}</button>
             </div>
