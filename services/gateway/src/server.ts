@@ -382,7 +382,7 @@ app.post('/api/playback', async (req, res) => {
 
 const metadataCache = new Map<string, { expiresAt: number; value: unknown }>()
 function normalizeMediaTitle(value: string) {
-  return value.toLocaleLowerCase('en').replace(/\\(\\d{4}\\)/g, ' ').replace(/\\b(19|20)\\d{2}\\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\\s+/g, ' ')
+  return value.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
 }
 app.get('/api/metadata/:kind', async (req, res) => {
   const kind = String(req.params.kind)
