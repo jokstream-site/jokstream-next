@@ -210,7 +210,7 @@ export default {
 
       if (url.pathname === "/test-stream") {
         const id = url.searchParams.get("id") || "1981089";
-        if (!/^\\d{1,20}$/.test(id)) return json({ error: "Invalid stream id" }, 400);
+        if (!/^\d{1,20}$/.test(id)) return json({ error: "Invalid stream id" }, 400);
         const [ts, hls] = await Promise.all([
           probeStream(cfg, id, "ts"),
           probeStream(cfg, id, "m3u8")
