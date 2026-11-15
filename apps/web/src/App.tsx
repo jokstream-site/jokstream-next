@@ -29,6 +29,7 @@ export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [playbackUrl, setPlaybackUrl] = useState('')
   const [playbackError, setPlaybackError] = useState('')
+  const [playbackLoading, setPlaybackLoading] = useState(false)
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [selectedEpisodeId, setSelectedEpisodeId] = useState('')
   const [playing, setPlaying] = useState(false)
@@ -154,16 +155,41 @@ export default function App() {
     return () => { cancelled = true; hls?.destroy(); video.pause(); video.removeAttribute('src'); video.load() }
   }, [playbackUrl])
 
-  async function playSelected() {
-    if (!selected.id) return
-    if (selected.kind === 'series' && !selectedEpisodeId) { setPlaybackError('Select an episode first.'); return }
-    setPlaybackError(''); setPlaybackUrl('')
+  async function startPlayback(item: Channel, episodeId?: string) {
+    if (!item.id) return
+    const targetEpisode = episodeId || (item.kind === 'series' ? selectedEpisodeId : '')
+    if (item.kind === 'series' && !targetEpisode) { setPlaybackError('Select an episode first.'); return }
+    setSelected(item)
+    setPlaybackError('')
+    setPlaybackUrl('')
+    setPlaybackLoading(true)
+    setPlaying(false)
+    document.getElementById('jok-player')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     try {
-      const response = await fetch(API + '/api/playback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: selected.kind, id: selected.kind === 'series' ? selectedEpisodeId : selected.id, ...(selected.kind === 'series' ? { seriesId: selected.id } : {}) }) })
+      const response = await fetch(API + '/api/playback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: item.kind, id: item.kind === 'series' ? targetEpisode : item.id, ...(item.kind === 'series' ? { seriesId: item.id } : {}) })
+      })
       const result = await response.json() as { url?: string; error?: string }
       if (!response.ok || !result.url) throw new Error(result.error || 'playback_unavailable')
-      setPlaybackUrl(result.url); setPlaying(true)
-    } catch { setPlaybackError('Could not generate a playback URL. Check MediaFlow and provider settings in server secrets.') }
+      setPlaybackUrl(result.url)
+      setPlaying(true)
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'playback_unavailable'
+      const messages: Record<string,string> = {
+        media_proxy_not_configured: 'Secure playback is not configured yet. Please contact the administrator.',
+        provider_not_configured: 'The streaming provider is not configured.',
+        redistribution_not_authorized: 'Playback is disabled until provider redistribution authorization is confirmed.',
+        playback_url_generation_failed: 'The streaming proxy could not create a playback link. Check the provider stream and MediaFlow logs.'
+      }
+      setPlaybackError(messages[code] || 'Playback could not start. The stream may be unavailable or rejected by the provider.')
+    } finally {
+      setPlaybackLoading(false)
+    }
+  }
+  async function playSelected() {
+    await startPlayback(selected)
   }
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
@@ -292,7 +318,7 @@ export default function App() {
       <section className="jok-section">
         <div className="jok-section-head"><div><span className="eyebrow">DISCOVER YOUR LIBRARY</span><h2><Flame/> Picked for you</h2></div><span className="jok-section-note">Real titles from your synced catalog</span></div>
         <div className="jok-picks-grid">
-          {libraryPicks.slice(0,4).map((item,index)=><button key={item.kind+'-'+item.id} className={'jok-pick-card pick-'+index} onClick={()=>{setSelected(item);setActiveSection(item.kind==='movie'?'movies':'series');document.getElementById('jok-player')?.scrollIntoView({behavior:'smooth'})}}><span className="pick-art"><span className="pick-art-symbol">{item.kind==='movie'?<Film size={34}/>:<Clapperboard size={34}/>}</span><span className="pick-kind">{item.kind==='movie'?'Movie':'Series'}</span><span className="pick-play"><Play fill="currentColor" size={17}/></span></span><span className="pick-info"><b>{item.name}</b><small>{item.category}</small></span></button>)}
+          {libraryPicks.slice(0,4).map((item,index)=><button key={item.kind+'-'+item.id} className={'jok-pick-card pick-'+index} onClick={()=>{setActiveSection(item.kind==='movie'?'movies':'series');void startPlayback(item)}}><span className="pick-art"><span className="pick-art-symbol">{item.kind==='movie'?<Film size={34}/>:<Clapperboard size={34}/>}</span><span className="pick-kind">{item.kind==='movie'?'Movie':'Series'}</span><span className="pick-play"><Play fill="currentColor" size={17}/></span></span><span className="pick-info"><b>{item.name}</b><small>{item.category}</small></span></button>)}
           {libraryPicks.length===0 && <div className="jok-no-picks">Your library titles will appear here when the catalog loads.</div>}
         </div>
       </section>
@@ -308,15 +334,15 @@ export default function App() {
         <div className="watch-main">
           <div className="section-heading"><div><span className="eyebrow">LIVE EXPERIENCE</span><h2>Watch Now</h2></div><span className="quality-pill"><span className="live-dot"/> LIVE</span></div>
           <div className="player-frame">
-            <div className="player-glow"/><video ref={videoRef} className="video-player" controls playsInline style={{ display: playbackUrl ? 'block' : 'none' }} /><div className="player-content" style={{ display: playbackUrl ? 'none' : 'flex' }}><div className="player-emblem"><Play fill="currentColor" size={28}/></div><span className="player-overline">JOKSTREAM PLAYER</span><h3>{selected.name}</h3><p>Your stream will appear here when the secure playback proxy is ready.</p><span className="setup-note"><Settings2 size={14}/> Secure player ready</span></div>
+            <div className="player-glow"/><video ref={videoRef} className="video-player" controls playsInline style={{ display: playbackUrl ? 'block' : 'none' }} /><div className="player-content" style={{ display: playbackUrl ? 'none' : 'flex' }}><div className="player-emblem"><Play fill="currentColor" size={28}/></div><span className="player-overline">JOKSTREAM PLAYER</span><h3>{selected.name}</h3><p>Select a title and press Play Now to start its stream. The player stays visible here.</p><span className="setup-note"><Settings2 size={14}/> Secure player ready</span></div>
             <div className="player-topline"><span className="player-live"><i/> LIVE</span><span className="player-watermark">JOKSTREAM</span></div>
             <div className="player-controls"><div className="now-playing"><span className="mini-channel"><Tv size={16}/></span><span><b>{selected.name}</b><small>{selected.detail}</small></span></div><div className="control-actions"><button className="player-control" title="Volume"><Volume2 size={18}/></button><button className="player-control" title={expanded ? 'Exit fullscreen' : 'Fullscreen'} onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button></div></div>
           </div>
-          <div className="below-player"><div><span className="eyebrow">NOW SELECTED</span><h3>{selected.name}</h3></div><div className="player-tools"><button className="gold-button play-button" onClick={() => void playSelected()} disabled={!selected.id || (selected.kind === 'series' && !selectedEpisodeId)}><Play size={15} fill="currentColor"/> {playing ? 'Play Again' : 'Play Now'}</button><button className="soft-button" onClick={() => setChatVisible(!chatVisible)}>{chatVisible ? <EyeOff size={16}/> : <Eye size={16}/>} {chatVisible ? 'Hide Chat' : 'Show Chat'}</button><button className="soft-button" onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>} {expanded ? 'Exit fullscreen' : 'Fullscreen'}</button></div></div>
-          {selected.kind === 'series' && <div className="episode-list"><b>Series episodes</b>{episodes.length ? episodes.map(ep => <button key={ep.id} className={selectedEpisodeId === ep.id ? 'episode-chip active' : 'episode-chip'} onClick={() => { setSelectedEpisodeId(ep.id); setPlaybackUrl(''); setPlaying(false) }}>Season {ep.season} · {ep.title}</button>) : <span>Loading episodes or no episodes are available.</span>}</div>}{playbackError && <p className="playback-error">{playbackError}</p>}
+          <div className="below-player"><div><span className="eyebrow">NOW SELECTED</span><h3>{selected.name}</h3></div><div className="player-tools"><button className="gold-button play-button" onClick={() => void playSelected()} disabled={!selected.id || playbackLoading || (selected.kind === 'series' && !selectedEpisodeId)}><Play size={15} fill="currentColor"/> {playbackLoading ? 'Starting stream…' : playing ? 'Play Again' : 'Play Now'}</button><button className="soft-button" onClick={() => setChatVisible(!chatVisible)}>{chatVisible ? <EyeOff size={16}/> : <Eye size={16}/>} {chatVisible ? 'Hide Chat' : 'Show Chat'}</button><button className="soft-button" onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>} {expanded ? 'Exit fullscreen' : 'Fullscreen'}</button></div></div>
+          {selected.kind === 'series' && <div className="episode-list"><b>Series episodes</b>{episodes.length ? episodes.map(ep => <button key={ep.id} className={selectedEpisodeId === ep.id ? 'episode-chip active' : 'episode-chip'} onClick={() => { setSelectedEpisodeId(ep.id); setPlaybackUrl(''); setPlaying(false) }}>Season {ep.season} · {ep.title}</button>) : <span>Loading episodes or no episodes are available.</span>}</div>}{playbackLoading && <p className="playback-status">Connecting to secure stream…</p>}{playbackError && <p className="playback-error">{playbackError}</p>}
           <div className="section-heading channel-heading"><div><span className="eyebrow">BROWSE THE CATALOG</span><h2>Catalog & Categories</h2></div><button className="text-link" onClick={() => {setActiveSection('live');setActiveCategory('All')}}>All Channels <span>←</span></button></div>
           <div className="catalog-category-row">{categoryNames.map(category=><button key={category} className={activeCategory===category?'category-chip active':'category-chip'} onClick={()=>setActiveCategory(category)}>{category}</button>)}</div>
-          {apiStatus === 'offline' && <p className="catalog-notice">Could not connect to the catalog service. Check the API URL.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">Service connected, but Xtream credentials are missing from server secrets.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">Catalog connected. Configure MediaFlow in Gateway secrets to enable secure playback.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'Loading library…' : 'Your library is ready'}</b><p>No items found in this section. Try another category or clear your search.</p></div>}<div className="channel-grid">{filteredChannels.map((channel, i) => <button key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { setSelected(channel); setPlaybackUrl(''); setPlaying(false) }}><span className={'channel-art '+channel.color}><span className="channel-number">0{i+1}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>{hasMore && <button className="soft-button" onClick={() => void loadMoreCatalog()} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load 60 more items'} · {(Math.max(0, catalogTotal - channels.length)).toLocaleString('ar')} remaining</button>}
+          {apiStatus === 'offline' && <p className="catalog-notice">Could not connect to the catalog service. Check the API URL.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">Service connected, but Xtream credentials are missing from server secrets.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">Catalog connected. Configure MediaFlow in Gateway secrets to enable secure playback.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'Loading library…' : 'Your library is ready'}</b><p>No items found in this section. Try another category or clear your search.</p></div>}<div className="channel-grid">{filteredChannels.map((channel, i) => <button key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { void startPlayback(channel) }}><span className={'channel-art '+channel.color}><span className="channel-number">0{i+1}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>{hasMore && <button className="soft-button" onClick={() => void loadMoreCatalog()} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load 60 more items'} · {(Math.max(0, catalogTotal - channels.length)).toLocaleString('ar')} remaining</button>}
         </div>
 
         {chatVisible && <aside className="chat-panel"><div className="chat-header"><div className="chat-title"><span className="chat-icon"><MessageCircle size={17}/></span><span><b>Live Chat</b><small>Chat with viewers</small></span></div><button className="icon-button" onClick={() => setChatVisible(false)} title="Hide Chat"><EyeOff size={17}/></button></div><div className="chat-channel"><span className="live-dot"/><b>{selected.name}</b><span>Public chat</span></div><div className="chat-messages">{!supabase && <div className="chat-empty"><MessageCircle size={25}/><b>Chat is offline</b><p>Configure Supabase to enable chat.</p></div>}{supabase && messages.length === 0 && <div className="chat-empty"><Sparkles size={25}/><b>Start chatting</b><p>Be the first to join this channel chat.</p></div>}{messages.map(m => <div className="message" key={m.id}><span className="avatar">{m.display_name.slice(0,1)}</span><div><div className="message-head"><b>{m.display_name}</b><time>{new Date(m.created_at).toLocaleTimeString('ar', {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.message}</p></div></div>)}<div ref={bottomRef}/></div>
