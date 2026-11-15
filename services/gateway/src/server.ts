@@ -45,6 +45,7 @@ app.get('/api/catalog', (req, res) => {
 })
 app.get('/api/status', (_req, res) => res.json({
   providerConfigured: Boolean(env.XTREAM_BASE_URL && env.XTREAM_USERNAME && env.XTREAM_PASSWORD),
+  adminConfigured: Boolean(env.ADMIN_API_TOKEN),
   redistributionAuthorized: env.UPSTREAM_REDISTRIBUTION_AUTHORIZED === 'true',
   catalogItems: catalog.length,
   mediaProxyConfigured: Boolean(process.env.MEDIAFLOW_BASE_URL && process.env.MEDIAFLOW_API_PASSWORD),
