@@ -117,7 +117,11 @@ export default function App() {
   async function syncCatalog(e: React.FormEvent) {
     e.preventDefault()
     const token = adminToken.trim()
-    if (!/^[\\x21-\\x7E]{32,}$/.test(token)) {
+    const tokenIsAscii = token.length >= 32 && Array.from(token).every(char => {
+      const code = char.charCodeAt(0)
+      return code >= 33 && code <= 126
+    })
+    if (!tokenIsAscii) {
       setAdminMessage('رمز الإدارة غير صالح: استخدم الرمز الإنجليزي كما هو، دون مسافات أو أحرف إضافية.')
       return
     }
