@@ -645,56 +645,124 @@ app.all('/api/stream/:token', async (req, res) => {
   }
   const mediaflowBase = env.MEDIAFLOW_BASE_URL
   if (!mediaflowBase) return res.status(503).json({ error: 'media_proxy_not_configured' })
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 90_000)
+  const abortOnDisconnect = () => {
+    if (!res.writableEnded) controller.abort()
+  }
+  res.once('close', abortOnDisconnect)
+
   try {
     const target = new URL(entry.url)
     if (target.origin !== new URL(mediaflowBase).origin) return res.status(403).json({ error: 'invalid_playback_target' })
-    const headers: Record<string, string> = { 'User-Agent': 'okhttp/5.0.0-alpha.2', Accept: req.header('accept') || '*/*' }
+
+    const headers: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 JokStream/1.0',
+      Accept: req.header('accept') || '*/*',
+      'Accept-Encoding': 'identity'
+    }
     const range = req.header('range')
+    const ifRange = req.header('if-range')
     if (range) headers.Range = range
+    if (ifRange) headers['If-Range'] = ifRange
+
     const upstream = await fetch(target, {
       method: req.method,
       headers,
       redirect: 'follow',
-      signal: AbortSignal.timeout(90_000)
+      signal: controller.signal
     })
     res.status(upstream.status)
-    if (!upstream.ok) console.warn('[stream-upstream-status]', { status: upstream.status, url: safeUrlForLog(upstream.url || target.toString()), hasRange: Boolean(range) })
-    for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) {
+    if (!upstream.ok) console.warn('[stream-upstream-status]', {
+      status: upstream.status,
+      url: safeUrlForLog(upstream.url || target.toString()),
+      hasRange: Boolean(range)
+    })
+
+    for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag', 'content-disposition']) {
       const value = upstream.headers.get(header)
       if (value) res.setHeader(header, value)
     }
     res.setHeader('Cache-Control', 'no-store')
+
     if (req.method === 'HEAD' || !upstream.body) return res.end()
 
+    const finalUrl = upstream.url || target.toString()
     const contentType = upstream.headers.get('content-type') || ''
-    const isManifest = /mpegurl|vnd\.apple\.mpegurl/i.test(contentType) || /\.m3u8(?:$|[?#])/i.test(target.pathname)
+    const isManifest =
+      /mpegurl|vnd\\.apple\\.mpegurl/i.test(contentType) ||
+      /\\.m3u8(?:$|[?#])/i.test(target.pathname) ||
+      /\\.m3u8(?:$|[?#])/i.test(new URL(finalUrl).pathname)
+
     if (isManifest && upstream.ok) {
       const manifest = await upstream.text()
+      const mediaflowOrigin = new URL(mediaflowBase).origin
       const toGatewayUrl = (raw: string) => {
-        const resolved = new URL(raw, upstream.url || target.toString())
-        if (resolved.origin !== new URL(mediaflowBase).origin) return raw
+        const resolved = new URL(raw, finalUrl)
+        if (resolved.origin !== mediaflowOrigin) return raw
         return '/api/stream/' + createPlaybackToken(resolved.toString())
       }
-      const rewritten = manifest.split(/\r?\n/).map(line => {
+      const rewritten = manifest.split(/\\r?\\n/).map(line => {
         const trimmed = line.trim()
         if (!trimmed) return line
-        if (trimmed.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (_match, uri: string) => 'URI="' + toGatewayUrl(uri) + '"')
+        if (trimmed.startsWith('#')) {
+          return line.replace(/URI="([^"]+)"/g, (_match, uri: string) => 'URI="' + toGatewayUrl(uri) + '"')
+        }
         return toGatewayUrl(trimmed)
-      }).join('\n')
+      }).join('\\n')
+
       res.removeHeader('Content-Length')
-      res.setHeader('Content-Type', contentType || 'application/vnd.apple.mpegurl')
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
       return res.send(rewritten)
     }
+
     return Readable.fromWeb(upstream.body as any).on('error', () => {
       if (!res.headersSent) res.status(502)
       res.end()
     }).pipe(res)
   } catch (error) {
     console.error('[stream-proxy]', { errorName: error instanceof Error ? error.name : 'unknown' })
-    if (!res.headersSent) return res.status(502).json({ error: 'upstream_stream_failed' })
-    res.end()
+    if (!res.headersSent && !res.destroyed) return res.status(502).json({ error: 'upstream_stream_failed' })
+    if (!res.destroyed) res.end()
+  } finally {
+    clearTimeout(timeout)
+    res.off('close', abortOnDisconnect)
   }
 })
+
+async function generateMediaFlowUrl(
+  proxyBase: string,
+  endpoint: string,
+  destinationUrl: string,
+  providerOrigin: string
+) {
+  const response = await fetch(proxyBase + '/generate_url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mediaflow_proxy_url: proxyBase,
+      endpoint,
+      destination_url: destinationUrl,
+      query_params: {},
+      request_headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
+        Accept: '*/*',
+        Referer: providerOrigin + '/',
+        Origin: providerOrigin
+      },
+      api_password: env.MEDIAFLOW_API_PASSWORD,
+      expiration: 1800
+    }),
+    signal: AbortSignal.timeout(20_000)
+  })
+  if (!response.ok) throw new Error('mediaflow_url_generation_failed')
+  const result = await response.json() as { url?: string }
+  if (!result.url) throw new Error('mediaflow_url_missing')
+  const generated = new URL(result.url)
+  if (generated.origin !== new URL(proxyBase).origin) throw new Error('mediaflow_generated_external_url')
+  return generated.toString()
+}
 
 app.post('/api/playback', async (req, res) => {
   const input = z.object({
@@ -709,10 +777,10 @@ app.post('/api/playback', async (req, res) => {
 
   try {
     const { kind, id, seriesId } = input.data
-    let extension = kind === 'live' ? 'ts' : 'mp4'
+    let extension = kind === 'live' ? 'm3u8' : 'mp4'
     const apiBase = env.XTREAM_API_BASE_URL
-      ? env.XTREAM_API_BASE_URL.replace(/\/$/, '')
-      : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+      ? env.XTREAM_API_BASE_URL.replace(/\\/$/, '')
+      : env.XTREAM_BASE_URL.replace(/\\/$/, '') + '/player_api.php'
 
     if (kind === 'series') {
       if (!seriesId) return res.status(400).json({ error: 'series_id_required' })
@@ -722,61 +790,62 @@ app.post('/api/playback', async (req, res) => {
       const info = await infoResponse.json() as { episodes?: Record<string, Array<{ id?: string | number; container_extension?: string }>> }
       const episode = Object.values(info.episodes || {}).flat().find(row => String(row.id ?? '') === id)
       if (!episode) return res.status(404).json({ error: 'episode_not_found' })
-      extension = String(episode.container_extension || 'mp4').replace(/^\./, '').toLowerCase()
+      extension = String(episode.container_extension || 'mp4').replace(/^\\./, '').toLowerCase()
     } else if (kind === 'movie') {
       const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_vod_info', vod_id: id })
       const infoResponse = await xtreamFetch(apiBase + '?' + params, 20_000)
       if (!infoResponse.ok) throw new Error('movie_info_failed')
       const info = await infoResponse.json() as { movie_data?: { container_extension?: string }; info?: { container_extension?: string }; container_extension?: string }
-      extension = String(info.movie_data?.container_extension || info.info?.container_extension || info.container_extension || 'mp4').replace(/^\./, '').toLowerCase()
+      extension = String(info.movie_data?.container_extension || info.info?.container_extension || info.container_extension || 'mp4').replace(/^\\./, '').toLowerCase()
     }
-    if (!/^[a-z0-9]{2,6}$/.test(extension)) extension = kind === 'live' ? 'ts' : 'mp4'
-    if (kind === 'live' && !['ts', 'm3u8'].includes(extension)) extension = 'ts'
+
+    if (!/^[a-z0-9]{2,6}$/.test(extension)) extension = kind === 'live' ? 'm3u8' : 'mp4'
+    if (kind === 'live') extension = 'm3u8'
 
     const path = kind === 'live' ? 'live' : kind === 'movie' ? 'movie' : 'series'
     const upstreamUrl = new URL('/' + path + '/' + encodeURIComponent(env.XTREAM_USERNAME) + '/' + encodeURIComponent(env.XTREAM_PASSWORD) + '/' + encodeURIComponent(id) + '.' + extension, env.XTREAM_BASE_URL).toString()
-    const isLiveHls = kind === 'live' && extension === 'm3u8'
-    const isLiveMpegTs = kind === 'live' && extension === 'ts'
-    const transcodeHls = kind !== 'live' && ['mkv', 'avi', 'ts'].includes(extension)
-    const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\/$/, '')
-    const generated = await fetch(proxyBase + '/generate_url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        mediaflow_proxy_url: proxyBase,
-        endpoint: isLiveHls ? '/proxy/hls/manifest.m3u8' : transcodeHls ? '/proxy/transcode/playlist.m3u8' : '/proxy/stream',
-        destination_url: upstreamUrl,
-        query_params: {},
-        request_headers: { 'User-Agent': 'okhttp/5.0.0-alpha.2', Accept: '*/*' },
-        api_password: env.MEDIAFLOW_API_PASSWORD,
-        expiration: 1800
-      }),
-      signal: AbortSignal.timeout(20_000)
-    })
-    if (!generated.ok) throw new Error('mediaflow_url_generation_failed')
-    const result = await generated.json() as { url?: string }
-    if (!result.url) throw new Error('mediaflow_url_missing')
+    const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\\/$/, '')
+    const providerOrigin = new URL(env.XTREAM_BASE_URL).origin
+    const isLive = kind === 'live'
+    const isVodHls = !isLive && extension === 'm3u8'
+    const transcodeHls = !isLive && ['mkv', 'avi', 'ts'].includes(extension)
+    const primaryEndpoint = isLive || isVodHls
+      ? '/proxy/hls/manifest.m3u8'
+      : transcodeHls
+        ? '/proxy/transcode/playlist.m3u8'
+        : '/proxy/stream'
 
-    const target = new URL(result.url)
-    if (target.origin !== new URL(proxyBase).origin) throw new Error('mediaflow_generated_external_url')
-    const token = createPlaybackToken(target.toString())
-    const publicUrlObject = new URL('/api/stream/' + token, req.protocol + '://' + req.get('host'))
-    if (isLiveMpegTs) publicUrlObject.searchParams.set('format', 'mpegts')
-    if (isLiveHls || transcodeHls) publicUrlObject.searchParams.set('format', 'hls')
-    const publicUrl = publicUrlObject.toString()
-    console.info('[playback-url]', {
+    const primaryTarget = await generateMediaFlowUrl(proxyBase, primaryEndpoint, upstreamUrl, providerOrigin)
+    const primaryToken = createPlaybackToken(primaryTarget)
+    const publicUrl = new URL('/api/stream/' + primaryToken, req.protocol + '://' + req.get('host'))
+    publicUrl.searchParams.set('format', isLive || isVodHls || transcodeHls ? 'hls' : 'file')
+
+    let fallbackUrl: string | undefined
+    if (isLive) {
+      const tsUpstreamUrl = new URL('/live/' + encodeURIComponent(env.XTREAM_USERNAME) + '/' + encodeURIComponent(env.XTREAM_PASSWORD) + '/' + encodeURIComponent(id) + '.ts', env.XTREAM_BASE_URL).toString()
+      const fallbackTarget = await generateMediaFlowUrl(proxyBase, '/proxy/stream', tsUpstreamUrl, providerOrigin)
+      const fallbackToken = createPlaybackToken(fallbackTarget)
+      const fallback = new URL('/api/stream/' + fallbackToken, req.protocol + '://' + req.get('host'))
+      fallback.searchParams.set('format', 'mpegts')
+      fallbackUrl = fallback.toString()
+    }
+
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({
+      url: publicUrl.toString(),
+      fallbackUrl,
+      expiresIn: 1800,
       kind,
-      upstream: safeXtreamUrlForLog(upstreamUrl),
-      mediaflow: safeUrlForLog(target.toString()),
-      frontend: req.protocol + '://' + req.get('host') + '/api/stream/[opaque-token]',
-      extension
+      extension,
+      playbackType: isLive || isVodHls || transcodeHls ? 'hls' : 'file',
+      fallbackPlaybackType: isLive ? 'mpegts' : undefined
     })
-    res.json({ url: publicUrl, expiresIn: 1800, kind, extension, playbackType: isLiveMpegTs ? 'mpegts' : isLiveHls || transcodeHls ? 'hls' : 'file' })
   } catch (error) {
     console.error('[playback-url-error]', { kind: input.data.kind, errorName: error instanceof Error ? error.name : 'unknown' })
     res.status(502).json({ error: 'playback_url_generation_failed' })
   }
 })
+
 const metadataCache = new Map<string, { expiresAt: number; value: unknown }>()
 function normalizeMediaTitle(value: string) {
   return value.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
