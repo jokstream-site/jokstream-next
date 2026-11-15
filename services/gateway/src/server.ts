@@ -6,14 +6,14 @@ import { z } from 'zod'
 
 const env = z.object({
   PORT: z.coerce.number().int().positive().default(8787),
-  ADMIN_API_TOKEN: z.string().min(32).optional(),
+  ADMIN_API_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
   ALLOWED_ORIGINS: z.string().default('http://localhost:5173'),
-  XTREAM_BASE_URL: z.string().url().optional(),
+  XTREAM_BASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   XTREAM_USERNAME: z.string().optional(),
   XTREAM_PASSWORD: z.string().optional(),
   UPSTREAM_REDISTRIBUTION_AUTHORIZED: z.enum(['true', 'false']).default('false'),
-  MEDIAFLOW_BASE_URL: z.string().url().optional(),
-  MEDIAFLOW_API_PASSWORD: z.string().min(16).optional()
+  MEDIAFLOW_BASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
+  MEDIAFLOW_API_PASSWORD: z.preprocess(value => value === '' ? undefined : value, z.string().min(16).optional())
 }).parse(process.env)
 
 type CatalogItem = { id: string; name: string; category: string; kind: 'live' | 'movie' | 'series'; extension?: string }
