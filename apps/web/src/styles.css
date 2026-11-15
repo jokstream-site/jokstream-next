@@ -203,3 +203,8 @@
 .catalog-art-fallback{display:grid;place-items:center;width:100%;height:100%;color:#d9b978;background:radial-gradient(circle at 50% 35%,#4a3a31,#171923 72%)}
 .pick-art .catalog-art-wrap{z-index:0}
 .channel-art .catalog-art-wrap{z-index:0}
+
+.jok-hero-art .catalog-art-wrap{z-index:0;inset:0;opacity:.78}
+.jok-hero-art .catalog-art-image{object-position:center 30%;filter:saturate(.9)}
+.jok-hero-art .catalog-art-wrap:after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,#080a10 0%,#080a1077 42%,#080a1022 100%),linear-gradient(0deg,#080a10 0%,transparent 45%)}
+.jok-hero-art .hero-orbit,.jok-hero-art .hero-play-mark,.jok-hero-art .hero-floating{z-index:1}
