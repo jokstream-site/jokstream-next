@@ -11,6 +11,33 @@ const API = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/
 const emptySelection: Channel = { id: '', name: 'Choose something to watch', category: 'JokStream', detail: 'Library', color: 'blue', kind: 'live' }
 const sections = [{ id: 'home', label: 'Discover', icon: Sparkles }, { id: 'live', label: 'Live TV', icon: Radio }, { id: 'movies', label: 'Movies', icon: Film }, { id: 'series', label: 'Series', icon: Clapperboard }, { id: 'sports', label: 'Sports', icon: Trophy }]
 
+function CatalogArtwork({ item }: { item: Channel }) {
+  const [image, setImage] = useState(item.image_url || '')
+  const host = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (image || item.kind === 'live' || !host.current) return
+    let cancelled = false
+    const target = host.current
+    const load = async () => {
+      try {
+        const response = await fetch(API + '/api/metadata/' + item.kind + '?title=' + encodeURIComponent(item.name))
+        if (!response.ok) return
+        const data = await response.json() as { matched?: boolean; meta?: { poster?: string } }
+        if (!cancelled && data.matched && data.meta?.poster && /^https:/i.test(data.meta.poster)) setImage(data.meta.poster)
+      } catch { /* keep the neutral artwork fallback */ }
+    }
+    if (typeof IntersectionObserver === 'undefined') { void load(); return () => { cancelled = true } }
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) { observer.disconnect(); void load() }
+    }, { rootMargin: '180px' })
+    observer.observe(target)
+    return () => { cancelled = true; observer.disconnect() }
+  }, [image, item.id, item.kind, item.name])
+  return <span className="catalog-art-wrap" ref={host}>
+    {image ? <img className="catalog-art-image" src={image} alt={item.name} loading="lazy"/> : <span className="catalog-art-fallback">{item.kind === 'movie' ? <Film size={28}/> : item.kind === 'series' ? <Clapperboard size={28}/> : <Tv size={25}/>}</span>}
+  </span>
+}
+
 export default function App() {
   const [activeSection, setActiveSection] = useState('home')
   const [selected, setSelected] = useState<Channel>(emptySelection)
@@ -350,7 +377,7 @@ export default function App() {
       <section className="jok-section">
         <div className="jok-section-head"><div><span className="eyebrow">DISCOVER YOUR LIBRARY</span><h2><Flame/> Picked for you</h2></div><span className="jok-section-note">Real titles from your synced catalog</span></div>
         <div className="jok-picks-grid">
-          {libraryPicks.slice(0,4).map((item,index)=><button key={item.kind+'-'+item.id} className={'jok-pick-card pick-'+index} onClick={()=>{setSelected(item);setActiveSection(item.kind==='movie'?'movies':'series');window.scrollTo({top:0,behavior:'smooth'})}}><span className="pick-art">{item.image_url ? <img src={item.image_url} alt={item.name} loading="lazy"/> : null}<span className="pick-art-symbol" style={{display:item.image_url?'none':'grid'}}>{item.kind==='movie'?<Film size={34}/>:<Clapperboard size={34}/>}</span><span className="pick-kind">{item.kind==='movie'?'Movie':'Series'}</span><span className="pick-play"><Play fill="currentColor" size={17}/></span></span><span className="pick-info"><b>{item.name}</b><small>{item.category}</small></span></button>)}
+          {libraryPicks.slice(0,4).map((item,index)=><button key={item.kind+'-'+item.id} className={'jok-pick-card pick-'+index} onClick={()=>{setSelected(item);setActiveSection(item.kind==='movie'?'movies':'series');window.scrollTo({top:0,behavior:'smooth'})}}><span className="pick-art"><CatalogArtwork item={item}/><span className="pick-art-symbol" style={{display:'none'}}>{item.kind==='movie'?<Film size={34}/>:<Clapperboard size={34}/>}</span><span className="pick-kind">{item.kind==='movie'?'Movie':'Series'}</span><span className="pick-play"><Play fill="currentColor" size={17}/></span></span><span className="pick-info"><b>{item.name}</b><small>{item.category}</small></span></button>)}
           {libraryPicks.length===0 && <div className="jok-no-picks">Your library titles will appear here when the catalog loads.</div>}
         </div>
       </section>
@@ -387,7 +414,7 @@ export default function App() {
           <div className="section-heading channel-heading"><div><span className="eyebrow">BROWSE THE CATALOG</span><h2>Catalog & Categories</h2></div><button className="text-link" onClick={() => {setActiveSection('live');setActiveCategory('All')}}>All Channels <span>←</span></button></div>
           <div className="category-folder-grid" aria-label="Catalog folders">{categoryNames.map(category=><button type="button" key={category} aria-pressed={activeCategory===category} className={activeCategory===category?'category-chip active':'category-chip'} onClick={()=>setActiveCategory(category)}>{category==='All'?'All categories':category}{category!=='All' ? <small className="category-count">{catalogCategories.find(row=>row.name===category)?.count.toLocaleString('en-US') || ''}</small> : null}</button>)}</div>
           <div id="catalog-items" className="catalog-items-heading"><span className="eyebrow">FOLDER CONTENTS</span><h3>{activeCategory==='All'?'All catalog items':activeCategory}</h3><span>{(activeCategory==='All' ? catalogTotal : catalogCategories.find(row=>row.name===activeCategory)?.count || catalogTotal).toLocaleString('en-US')} items</span></div>
-          {apiStatus === 'offline' && <p className="catalog-notice">Could not connect to the catalog service. Check the API URL.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">Service connected, but Xtream credentials are missing from server secrets.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">Catalog connected. Configure MediaFlow in Gateway secrets to enable secure playback.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'Loading library…' : 'This category is empty'}</b><p>No items found in this folder. Choose another category or clear your search.</p></div>}<div className="channel-grid">{filteredChannels.map((channel, i) => <button type="button" key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { setSelected(channel); setPlaybackUrl(''); setPlaybackError(''); setPlaying(false); window.scrollTo({top:0,behavior:'smooth'}) }}><span className={'channel-art '+channel.color}>{channel.image_url ? <img className="catalog-art-image" src={channel.image_url} alt={channel.name} loading="lazy"/> : null}<span className="channel-number">{String(i+1).padStart(2,'0')}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>{hasMore && <button className="soft-button" onClick={() => void loadMoreCatalog()} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load 60 more items'} · {(Math.max(0, catalogTotal - channels.length)).toLocaleString('en-US')} remaining</button>}
+          {apiStatus === 'offline' && <p className="catalog-notice">Could not connect to the catalog service. Check the API URL.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">Service connected, but Xtream credentials are missing from server secrets.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">Catalog connected. Configure MediaFlow in Gateway secrets to enable secure playback.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'Loading library…' : 'This category is empty'}</b><p>No items found in this folder. Choose another category or clear your search.</p></div>}<div className="channel-grid">{filteredChannels.map((channel, i) => <button type="button" key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { setSelected(channel); setPlaybackUrl(''); setPlaybackError(''); setPlaying(false); window.scrollTo({top:0,behavior:'smooth'}) }}><span className={'channel-art '+channel.color}><CatalogArtwork item={channel}/><span className="channel-number">{String(i+1).padStart(2,'0')}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>{hasMore && <button className="soft-button" onClick={() => void loadMoreCatalog()} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load 60 more items'} · {(Math.max(0, catalogTotal - channels.length)).toLocaleString('en-US')} remaining</button>}
         </div>
 
         {chatVisible && <aside className="chat-panel"><div className="chat-header"><div className="chat-title"><span className="chat-icon"><MessageCircle size={17}/></span><span><b>Live Chat</b><small>Chat with viewers</small></span></div><button className="icon-button" onClick={() => setChatVisible(false)} title="Hide Chat"><EyeOff size={17}/></button></div><div className="chat-channel"><span className="live-dot"/><b>{selected.name}</b><span>Public chat</span></div><div className="chat-messages">{!supabase && <div className="chat-empty"><MessageCircle size={25}/><b>Chat is offline</b><p>Configure Supabase to enable chat.</p></div>}{supabase && messages.length === 0 && <div className="chat-empty"><Sparkles size={25}/><b>Start chatting</b><p>Be the first to join this channel chat.</p></div>}{messages.map(m => <div className="message" key={m.id}><span className="avatar">{m.display_name.slice(0,1)}</span><div><div className="message-head"><b>{m.display_name}</b><time>{new Date(m.created_at).toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.message}</p></div></div>)}<div ref={bottomRef}/></div>
