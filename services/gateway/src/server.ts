@@ -779,8 +779,8 @@ app.post('/api/playback', async (req, res) => {
     const { kind, id, seriesId } = input.data
     let extension = kind === 'live' ? 'm3u8' : 'mp4'
     const apiBase = env.XTREAM_API_BASE_URL
-      ? env.XTREAM_API_BASE_URL.replace(/\\/$/, '')
-      : env.XTREAM_BASE_URL.replace(/\\/$/, '') + '/player_api.php'
+      ? env.XTREAM_API_BASE_URL.replace(/\/$/, '')
+      : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
 
     if (kind === 'series') {
       if (!seriesId) return res.status(400).json({ error: 'series_id_required' })
@@ -790,13 +790,13 @@ app.post('/api/playback', async (req, res) => {
       const info = await infoResponse.json() as { episodes?: Record<string, Array<{ id?: string | number; container_extension?: string }>> }
       const episode = Object.values(info.episodes || {}).flat().find(row => String(row.id ?? '') === id)
       if (!episode) return res.status(404).json({ error: 'episode_not_found' })
-      extension = String(episode.container_extension || 'mp4').replace(/^\\./, '').toLowerCase()
+      extension = String(episode.container_extension || 'mp4').replace(/^\./, '').toLowerCase()
     } else if (kind === 'movie') {
       const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_vod_info', vod_id: id })
       const infoResponse = await xtreamFetch(apiBase + '?' + params, 20_000)
       if (!infoResponse.ok) throw new Error('movie_info_failed')
       const info = await infoResponse.json() as { movie_data?: { container_extension?: string }; info?: { container_extension?: string }; container_extension?: string }
-      extension = String(info.movie_data?.container_extension || info.info?.container_extension || info.container_extension || 'mp4').replace(/^\\./, '').toLowerCase()
+      extension = String(info.movie_data?.container_extension || info.info?.container_extension || info.container_extension || 'mp4').replace(/^\./, '').toLowerCase()
     }
 
     if (!/^[a-z0-9]{2,6}$/.test(extension)) extension = kind === 'live' ? 'm3u8' : 'mp4'
@@ -804,7 +804,7 @@ app.post('/api/playback', async (req, res) => {
 
     const path = kind === 'live' ? 'live' : kind === 'movie' ? 'movie' : 'series'
     const upstreamUrl = new URL('/' + path + '/' + encodeURIComponent(env.XTREAM_USERNAME) + '/' + encodeURIComponent(env.XTREAM_PASSWORD) + '/' + encodeURIComponent(id) + '.' + extension, env.XTREAM_BASE_URL).toString()
-    const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\\/$/, '')
+    const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\/$/, '')
     const providerOrigin = new URL(env.XTREAM_BASE_URL).origin
     const isLive = kind === 'live'
     const isVodHls = !isLive && extension === 'm3u8'
