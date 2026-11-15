@@ -359,7 +359,7 @@ async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.R
       if (cached && cached.expiresAt > Date.now()) {
         iconMap = cached.value as Map<string, string>
       } else {
-        const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL!.replace(/\/$/, '') + '/player_api.php'
+        const apiBase = env.XTREAM_API_BASE_URL!.replace(/\/$/, '')
         const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_live_streams' })
         const response = await xtreamFetch(apiBase + '?' + params, 25000)
         if (!response.ok) throw new Error('live_icons_unavailable')
@@ -516,7 +516,7 @@ async function runCatalogSync() {
   const update = (patch: Partial<SyncState>) => { syncState = { ...syncState, ...patch, updatedAt: new Date().toISOString() } }
   try {
     if (env.UPSTREAM_REDISTRIBUTION_AUTHORIZED !== 'true') throw new Error('provider_redistribution_authorization_required')
-    if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) throw new Error('provider_not_configured')
+    if (!env.XTREAM_API_BASE_URL || !env.XTREAM_PROXY_TOKEN) throw new Error('provider_not_configured')
     if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY || !env.CATALOG_SYNC_SECRET) throw new Error('catalog_storage_not_configured')
     update({ stage: 'account_request' })
     const base = env.XTREAM_API_BASE_URL ? trimTrailingSlash(env.XTREAM_API_BASE_URL) : trimTrailingSlash(env.XTREAM_BASE_URL) + '/player_api.php'
@@ -644,7 +644,8 @@ app.all('/api/stream/:token', async (req, res) => {
     return res.status(404).json({ error: 'playback_link_expired' })
   }
   const mediaflowBase = env.MEDIAFLOW_BASE_URL
-  if (!mediaflowBase) return res.status(503).json({ error: 'media_proxy_not_configured' })
+  const workerBase = env.XTREAM_API_BASE_URL ? new URL(env.XTREAM_API_BASE_URL).origin : ''
+  if (!mediaflowBase && !workerBase) return res.status(503).json({ error: 'cloudflare_proxy_not_configured' })
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 90_000)
@@ -655,7 +656,8 @@ app.all('/api/stream/:token', async (req, res) => {
 
   try {
     const target = new URL(entry.url)
-    if (target.origin !== new URL(mediaflowBase).origin) return res.status(403).json({ error: 'invalid_playback_target' })
+    const allowedOrigins = new Set([workerBase, mediaflowBase ? new URL(mediaflowBase).origin : ''].filter(Boolean))
+    if (!allowedOrigins.has(target.origin)) return res.status(403).json({ error: 'invalid_playback_target' })
 
     const headers: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 JokStream/1.0',
@@ -697,10 +699,10 @@ app.all('/api/stream/:token', async (req, res) => {
 
     if (isManifest && upstream.ok) {
       const manifest = await upstream.text()
-      const mediaflowOrigin = new URL(mediaflowBase).origin
+      const allowedOrigins = new Set([workerBase, mediaflowBase ? new URL(mediaflowBase).origin : ''].filter(Boolean))
       const toGatewayUrl = (raw: string) => {
         const resolved = new URL(raw, finalUrl)
-        if (resolved.origin !== mediaflowOrigin) return raw
+        if (!allowedOrigins.has(resolved.origin)) return raw
         return '/api/stream/' + createPlaybackToken(resolved.toString())
       }
       const rewritten = manifest.split(/\r?\n/).map(line => {
@@ -772,15 +774,12 @@ app.post('/api/playback', async (req, res) => {
   }).safeParse(req.body)
   if (!input.success) return res.status(400).json({ error: 'invalid_playback_request' })
   if (env.UPSTREAM_REDISTRIBUTION_AUTHORIZED !== 'true') return res.status(403).json({ error: 'redistribution_not_authorized' })
-  if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) return res.status(503).json({ error: 'provider_not_configured' })
-  if (!env.MEDIAFLOW_BASE_URL || !env.MEDIAFLOW_API_PASSWORD) return res.status(503).json({ error: 'media_proxy_not_configured' })
+  if (!env.XTREAM_API_BASE_URL || !env.XTREAM_PROXY_TOKEN) return res.status(503).json({ error: 'cloudflare_proxy_not_configured' })
 
   try {
     const { kind, id, seriesId } = input.data
     let extension = kind === 'live' ? 'm3u8' : 'mp4'
-    const apiBase = env.XTREAM_API_BASE_URL
-      ? env.XTREAM_API_BASE_URL.replace(/\/$/, '')
-      : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+    const apiBase = env.XTREAM_API_BASE_URL.replace(/\/$/, '')
 
     if (kind === 'series') {
       if (!seriesId) return res.status(400).json({ error: 'series_id_required' })
@@ -803,27 +802,28 @@ app.post('/api/playback', async (req, res) => {
     if (kind === 'live') extension = 'm3u8'
 
     const path = kind === 'live' ? 'live' : kind === 'movie' ? 'movie' : 'series'
-    const upstreamUrl = new URL('/' + path + '/' + encodeURIComponent(env.XTREAM_USERNAME) + '/' + encodeURIComponent(env.XTREAM_PASSWORD) + '/' + encodeURIComponent(id) + '.' + extension, env.XTREAM_BASE_URL).toString()
-    const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\/$/, '')
-    const providerOrigin = new URL(env.XTREAM_BASE_URL).origin
+    const workerOrigin = new URL(env.XTREAM_API_BASE_URL).origin
+    const upstream = new URL('/stream/' + path + '/' + encodeURIComponent(id) + '.' + extension, workerOrigin)
+    upstream.searchParams.set('token', env.XTREAM_PROXY_TOKEN)
+    const upstreamUrl = upstream.toString()
     const isLive = kind === 'live'
     const isVodHls = !isLive && extension === 'm3u8'
     const transcodeHls = !isLive && ['mkv', 'avi', 'ts'].includes(extension)
-    const primaryEndpoint = isLive || isVodHls
-      ? '/proxy/hls/manifest.m3u8'
-      : transcodeHls
-        ? '/proxy/transcode/playlist.m3u8'
-        : '/proxy/stream'
-
-    const primaryTarget = await generateMediaFlowUrl(proxyBase, primaryEndpoint, upstreamUrl, providerOrigin)
+    let primaryTarget = upstreamUrl
+    if (transcodeHls) {
+      if (!env.MEDIAFLOW_BASE_URL || !env.MEDIAFLOW_API_PASSWORD) return res.status(503).json({ error: 'media_proxy_not_configured_for_transcode' })
+      const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\/$/, '')
+      primaryTarget = await generateMediaFlowUrl(proxyBase, '/proxy/transcode/playlist.m3u8', upstreamUrl, workerOrigin)
+    }
     const primaryToken = createPlaybackToken(primaryTarget)
     const publicUrl = new URL('/api/stream/' + primaryToken, req.protocol + '://' + req.get('host'))
     publicUrl.searchParams.set('format', isLive || isVodHls || transcodeHls ? 'hls' : 'file')
 
     let fallbackUrl: string | undefined
     if (isLive) {
-      const tsUpstreamUrl = new URL('/live/' + encodeURIComponent(env.XTREAM_USERNAME) + '/' + encodeURIComponent(env.XTREAM_PASSWORD) + '/' + encodeURIComponent(id) + '.ts', env.XTREAM_BASE_URL).toString()
-      const fallbackTarget = await generateMediaFlowUrl(proxyBase, '/proxy/stream', tsUpstreamUrl, providerOrigin)
+      const tsUrl = new URL('/stream/live/' + encodeURIComponent(id) + '.ts', workerOrigin)
+      tsUrl.searchParams.set('token', env.XTREAM_PROXY_TOKEN)
+      const fallbackTarget = tsUrl.toString()
       const fallbackToken = createPlaybackToken(fallbackTarget)
       const fallback = new URL('/api/stream/' + fallbackToken, req.protocol + '://' + req.get('host'))
       fallback.searchParams.set('format', 'mpegts')
@@ -891,10 +891,10 @@ app.get('/api/metadata/:kind', async (req, res) => {
 })
 
 app.get('/api/movie/:id', async (req, res) => {
-  if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) return res.status(503).json({ error: 'provider_not_configured' })
+  if (!env.XTREAM_API_BASE_URL || !env.XTREAM_PROXY_TOKEN) return res.status(503).json({ error: 'provider_not_configured' })
   try {
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_vod_info', vod_id: req.params.id })
-    const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+    const apiBase = env.XTREAM_API_BASE_URL!.replace(/\/$/, '')
     const response = await xtreamFetch(apiBase + '?' + params, 20_000)
     if (!response.ok) throw new Error('provider_error')
     res.setHeader('Cache-Control', 'private, max-age=300')
@@ -903,10 +903,10 @@ app.get('/api/movie/:id', async (req, res) => {
 })
 
 app.get('/api/series/:id', async (req, res) => {
-  if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) return res.status(503).json({ error: 'provider_not_configured' })
+  if (!env.XTREAM_API_BASE_URL || !env.XTREAM_PROXY_TOKEN) return res.status(503).json({ error: 'provider_not_configured' })
   try {
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: req.params.id })
-    const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+    const apiBase = env.XTREAM_API_BASE_URL!.replace(/\/$/, '')
     const response = await xtreamFetch(apiBase + '?' + params, 20_000)
     if (!response.ok) throw new Error('provider_error')
     res.json(await response.json())
