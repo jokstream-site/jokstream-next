@@ -241,6 +241,7 @@ export default function VideoPlayer({
   useEffect(() => {
     const generation = ++generationRef.current
     attemptRef.current = 0
+    sourceIndexRef.current = 0
     setRetryCount(0)
     setReason('')
     startAttempt(generation)
