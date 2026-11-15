@@ -37,21 +37,58 @@ export default function App() {
   const [adminMessage, setAdminMessage] = useState('')
   const [syncBusy, setSyncBusy] = useState(false)
   const [visibleCount, setVisibleCount] = useState(60)
+  const [catalogTotal, setCatalogTotal] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [catalogReload, setCatalogReload] = useState(0)
 
   useEffect(() => {
     let alive = true
-    Promise.all([fetch(API + '/api/catalog'), fetch(API + '/api/status')]).then(async ([catalogRes, statusRes]) => {
-      if (!catalogRes.ok || !statusRes.ok) throw new Error('api unavailable')
-      const catalogData = await catalogRes.json() as { items?: Array<{id:string;name:string;category:string;kind:'live'|'movie'|'series'}> }
-      const statusData = await statusRes.json() as { providerConfigured?: boolean; mediaProxyConfigured?: boolean; adminConfigured?: boolean }
+    const controller = new AbortController()
+    const kind = activeSection === 'live' || activeSection === 'sports' ? 'live' : activeSection === 'movies' ? 'movie' : activeSection === 'series' ? 'series' : ''
+    const params = new URLSearchParams({ limit: '60', offset: '0' })
+    if (kind) params.set('kind', kind)
+    if (search.trim()) params.set('q', search.trim())
+    setApiStatus('loading')
+    setChannels([])
+    setVisibleCount(60)
+    fetch(API + '/api/catalog?' + params.toString(), { signal: controller.signal }).then(async catalogRes => {
+      if (!catalogRes.ok) throw new Error('catalog unavailable')
+      const catalogData = await catalogRes.json() as { items?: Array<{id:string;name:string;category:string;kind:'live'|'movie'|'series'}>; total?: number }
+      const statusRes = await fetch(API + '/api/status', { signal: controller.signal })
+      if (!statusRes.ok) throw new Error('api unavailable')
+      const statusData = await statusRes.json() as { providerConfigured?: boolean; mediaProxyConfigured?: boolean }
       if (!alive) return
-      const items = (catalogData.items || []).map(item => ({...item, detail: item.category, color: item.kind === 'live' ? 'blue' : item.kind === 'movie' ? 'rose' : 'violet'}))
-      setProviderConfigured(Boolean(statusData.providerConfigured)); setMediaProxyConfigured(Boolean(statusData.mediaProxyConfigured)); setApiStatus('ready')
+      const items = (catalogData.items || []).map(item => ({...item, detail:item.category, color:item.kind === 'live' ? 'blue' : item.kind === 'movie' ? 'rose' : 'violet'}))
+      setProviderConfigured(Boolean(statusData.providerConfigured))
+      setMediaProxyConfigured(Boolean(statusData.mediaProxyConfigured))
+      setApiStatus('ready')
       setChannels(items)
+      setCatalogTotal(catalogData.total || 0)
+      setHasMore((catalogData.total || 0) > items.length)
       setSelected(current => items.find(item => item.id === current.id) || items[0] || current)
-    }).catch(() => { if (alive) setApiStatus('offline') })
-    return () => { alive = false }
-  }, [])
+    }).catch(error => { if (alive && error.name !== 'AbortError') setApiStatus('offline') })
+    return () => { alive = false; controller.abort() }
+  }, [activeSection, search, catalogReload])
+
+  async function loadMoreCatalog() {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    const kind = activeSection === 'live' || activeSection === 'sports' ? 'live' : activeSection === 'movies' ? 'movie' : activeSection === 'series' ? 'series' : ''
+    const params = new URLSearchParams({ limit: '60', offset: String(channels.length) })
+    if (kind) params.set('kind', kind)
+    if (search.trim()) params.set('q', search.trim())
+    try {
+      const response = await fetch(API + '/api/catalog?' + params.toString())
+      if (!response.ok) throw new Error('catalog_page_failed')
+      const data = await response.json() as { items?: Array<{id:string;name:string;category:string;kind:'live'|'movie'|'series'}>; total?: number }
+      const items = (data.items || []).map(item => ({...item, detail:item.category, color:item.kind === 'live' ? 'blue' : item.kind === 'movie' ? 'rose' : 'violet'}))
+      setChannels(previous => [...previous, ...items.filter(item => !previous.some(old => old.kind === item.kind && old.id === item.id))])
+      setCatalogTotal(data.total || 0)
+      setHasMore(channels.length + items.length < (data.total || 0))
+    } catch { setAdminMessage('تعذر تحميل الصفحة التالية من الكتالوج.') }
+    finally { setLoadingMore(false) }
+  }
 
   useEffect(() => {
     const client = supabase
@@ -115,7 +152,7 @@ export default function App() {
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   useEffect(() => { setVisibleCount(60) }, [activeSection, search])
-  const filteredChannels = useMemo(() => channels.filter(c => (!search.trim() || (c.name + c.category).toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) && (activeSection === 'home' || (activeSection === 'live' && c.kind === 'live') || (activeSection === 'movies' && c.kind === 'movie') || (activeSection === 'series' && c.kind === 'series') || (activeSection === 'sports' && /رياضة|sport/i.test(c.name + c.category)))), [channels, search, activeSection])
+  const filteredChannels = useMemo(() => activeSection === 'sports' ? channels.filter(c => /رياضة|sport/i.test(c.name + ' ' + c.category)) : channels, [channels, activeSection])
 
   async function syncCatalog(e: React.FormEvent) {
     e.preventDefault()
@@ -144,21 +181,17 @@ export default function App() {
         if (!statusResponse.ok) throw new Error(state.error || 'sync_status_failed')
         const stageLabels: Record<string, string> = {
           starting: 'تهيئة المزامنة', account_request: 'التحقق من حساب المزود', account_json: 'قراءة بيانات الحساب',
-          live_download: 'تحميل القنوات المباشرة', live_processing: 'معالجة القنوات المباشرة', live_completed: 'اكتملت القنوات المباشرة',
-          movie_download: 'تحميل الأفلام', movie_processing: 'معالجة الأفلام', movie_completed: 'اكتملت الأفلام',
-          series_download: 'تحميل المسلسلات', series_processing: 'معالجة المسلسلات', series_completed: 'اكتملت المسلسلات',
+          live_download: 'تحميل القنوات المباشرة', live_saving: 'حفظ القنوات على دفعات', live_completed: 'اكتملت القنوات المباشرة',
+          movie_download: 'تحميل الأفلام', movie_saving: 'حفظ الأفلام على دفعات', movie_completed: 'اكتملت الأفلام',
+          series_download: 'تحميل المسلسلات', series_saving: 'حفظ المسلسلات على دفعات', series_completed: 'اكتملت المسلسلات',
           completed: 'اكتملت المزامنة'
         }
         setAdminMessage((stageLabels[state.stage || ''] || 'جارٍ تنفيذ المزامنة') + ' · ' + (state.synced || 0).toLocaleString('ar'))
         if (state.status === 'failed') throw new Error(state.error || 'sync_failed')
         finished = state.status === 'completed'
       }
-      const refreshed = await fetch(API + '/api/catalog')
-      if (!refreshed.ok) throw new Error('catalog_refresh_failed')
-      const data = await refreshed.json() as { items?: Array<{id:string;name:string;category:string;kind:'live'|'movie'|'series'}> }
-      const items = (data.items || []).map(item => ({...item, detail:item.category, color:item.kind === 'live' ? 'blue' : item.kind === 'movie' ? 'rose' : 'violet'}))
-      setChannels(items); setSelected(items[0] || emptySelection)
-      setAdminMessage('اكتملت المزامنة بنجاح: ' + items.length.toLocaleString('ar') + ' عنصر.')
+      setCatalogReload(value => value + 1)
+      setAdminMessage('اكتملت المزامنة بنجاح: تم حفظ ' + (state.synced || 0).toLocaleString('ar') + ' عنصر بصورة دائمة.')
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
       const messages: Record<string, string> = {
@@ -215,7 +248,7 @@ export default function App() {
           <div className="below-player"><div><span className="eyebrow">NOW SELECTED</span><h3>{selected.name}</h3></div><div className="player-tools"><button className="gold-button play-button" onClick={() => void playSelected()} disabled={!selected.id || (selected.kind === 'series' && !selectedEpisodeId)}><Play size={15} fill="currentColor"/> {playing ? 'إعادة التشغيل' : 'تشغيل الآن'}</button><button className="soft-button" onClick={() => setChatVisible(!chatVisible)}>{chatVisible ? <EyeOff size={16}/> : <Eye size={16}/>} {chatVisible ? 'إخفاء الدردشة' : 'إظهار الدردشة'}</button><button className="soft-button" onClick={() => setExpanded(!expanded)}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>} {expanded ? 'تصغير المشغل' : 'تكبير المشغل'}</button></div></div>
           {selected.kind === 'series' && <div className="episode-list"><b>حلقات المسلسل</b>{episodes.length ? episodes.map(ep => <button key={ep.id} className={selectedEpisodeId === ep.id ? 'episode-chip active' : 'episode-chip'} onClick={() => { setSelectedEpisodeId(ep.id); setPlaybackUrl(''); setPlaying(false) }}>موسم {ep.season} · {ep.title}</button>) : <span>جارٍ تحميل الحلقات أو لا توجد حلقات متاحة.</span>}</div>}{playbackError && <p className="playback-error">{playbackError}</p>}
           <div className="section-heading channel-heading"><div><span className="eyebrow">PICK YOUR CHANNEL</span><h2>القنوات</h2></div><button className="text-link" onClick={() => setActiveSection('live')}>عرض الكل <span>←</span></button></div>
-          {apiStatus === 'offline' && <p className="catalog-notice">تعذر الاتصال بخدمة الكتالوج. تحقق من عنوان API.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">الخدمة متصلة، لكن بيانات Xtream لم تُضف بعد إلى أسرار الخادم.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">الكتالوج متصل. أضف إعدادات MediaFlow إلى أسرار Gateway لتفعيل التشغيل الآمن.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'جارٍ تحميل المكتبة…' : 'مكتبتك بانتظار الربط'}</b><p>ستظهر القنوات والأفلام والمسلسلات الحقيقية بعد إعداد بيانات المزود ومزامنة الكتالوج.</p></div>}<div className="channel-grid">{filteredChannels.slice(0, visibleCount).map((channel, i) => <button key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { setSelected(channel); setPlaybackUrl(''); setPlaying(false) }}><span className={'channel-art '+channel.color}><span className="channel-number">0{i+1}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>{filteredChannels.length > visibleCount && <button className="soft-button" onClick={() => setVisibleCount(count => count + 60)}>تحميل 60 عنصراً إضافياً ({(filteredChannels.length - visibleCount).toLocaleString("ar")} متبقية)</button>}
+          {apiStatus === 'offline' && <p className="catalog-notice">تعذر الاتصال بخدمة الكتالوج. تحقق من عنوان API.</p>}{apiStatus === 'ready' && !providerConfigured && <p className="catalog-notice">الخدمة متصلة، لكن بيانات Xtream لم تُضف بعد إلى أسرار الخادم.</p>}{apiStatus === 'ready' && providerConfigured && !mediaProxyConfigured && <p className="catalog-notice">الكتالوج متصل. أضف إعدادات MediaFlow إلى أسرار Gateway لتفعيل التشغيل الآمن.</p>}{filteredChannels.length === 0 && <div className="catalog-empty"><b>{apiStatus === 'loading' ? 'جارٍ تحميل المكتبة…' : 'مكتبتك بانتظار الربط'}</b><p>ستظهر القنوات والأفلام والمسلسلات الحقيقية بعد إعداد بيانات المزود ومزامنة الكتالوج.</p></div>}<div className="channel-grid">{filteredChannels.map((channel, i) => <button key={channel.id} className={selected.id === channel.id ? 'channel-card chosen' : 'channel-card'} onClick={() => { setSelected(channel); setPlaybackUrl(''); setPlaying(false) }}><span className={'channel-art '+channel.color}><span className="channel-number">0{i+1}</span><span className="channel-icon"><Tv size={25}/></span><span className="channel-play"><Play fill="currentColor" size={14}/></span></span><span className="channel-meta"><b>{channel.name}</b><small>{channel.category}</small></span></button>)}</div>{hasMore && <button className="soft-button" onClick={() => void loadMoreCatalog()} disabled={loadingMore}>{loadingMore ? 'جارٍ التحميل…' : 'تحميل 60 عنصراً إضافياً'} · {(Math.max(0, catalogTotal - channels.length)).toLocaleString('ar')} متبقية</button>}
         </div>
 
         {chatVisible && <aside className="chat-panel"><div className="chat-header"><div className="chat-title"><span className="chat-icon"><MessageCircle size={17}/></span><span><b>دردشة القناة</b><small>تفاعل مع المشاهدين</small></span></div><button className="icon-button" onClick={() => setChatVisible(false)} title="إخفاء الدردشة"><EyeOff size={17}/></button></div><div className="chat-channel"><span className="live-dot"/><b>{selected.name}</b><span>محادثة عامة</span></div><div className="chat-messages">{!supabase && <div className="chat-empty"><MessageCircle size={25}/><b>الدردشة غير متصلة</b><p>أضف إعدادات Supabase في ملف البيئة لتفعيل الدردشة.</p></div>}{supabase && messages.length === 0 && <div className="chat-empty"><Sparkles size={25}/><b>ابدأ التفاعل</b><p>كن أول من يشارك في دردشة هذه القناة.</p></div>}{messages.map(m => <div className="message" key={m.id}><span className="avatar">{m.display_name.slice(0,1)}</span><div><div className="message-head"><b>{m.display_name}</b><time>{new Date(m.created_at).toLocaleTimeString('ar', {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.message}</p></div></div>)}<div ref={bottomRef}/></div>
