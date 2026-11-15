@@ -8,7 +8,6 @@ type VideoPlayerProps = {
   title?: string
   autoPlay?: boolean
   className?: string
-  onClose?: () => void
   onStateChange?: (state: PlaybackState, reason?: string) => void
 }
 
@@ -93,7 +92,11 @@ export default function VideoPlayer({
 
   const startAttempt = useCallback((generation: number) => {
     const video = videoRef.current
-    if (!video || !src || generation !== generationRef.current) return
+    if (!video || generation !== generationRef.current) return
+    if (!src.trim()) {
+      publishState('failed', 'No stream URL was provided')
+      return
+    }
     clearTimers()
     if (hlsRef.current) {
       hlsRef.current.stopLoad()
