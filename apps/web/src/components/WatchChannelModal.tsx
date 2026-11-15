@@ -85,7 +85,8 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
   useEffect(() => {
     if (!supabase) return
     let active = true
-    const room = supabase.channel('room:' + channelId, {
+    const client = supabase
+    const room = client.channel('room:' + channelId, {
       config: { presence: { key: visitorKey } },
     })
 
@@ -115,7 +116,7 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
       setPresenceReady(false)
       // untrack before removal so other viewers receive the leave event promptly.
       void room.untrack().finally(() => {
-        void supabase.removeChannel(room)
+        void client.removeChannel(room)
       })
     }
   }, [channelId, visitorKey])
@@ -132,7 +133,8 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
     setMessages([])
     setChatLoading(true)
     setChatError('')
-    const room = supabase
+    const client = supabase
+    const room = client
       .channel('chat:' + channelId)
       .on(
         'postgres_changes',
@@ -152,7 +154,7 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
       )
       .subscribe()
 
-    void supabase
+    void client
       .from('channel_messages')
       .select('id,channel_id,nickname,content,created_at')
       .eq('channel_id', channelId)
@@ -172,7 +174,7 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
 
     return () => {
       active = false
-      void supabase.removeChannel(room)
+      void client.removeChannel(room)
     }
   }, [channelId])
 
