@@ -34,11 +34,17 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 }
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'jokstream-gateway' }))
-app.get('/api/catalog', (_req, res) => res.json({ items: catalog, updatedAt: lastSync }))
+app.get('/api/catalog', (req, res) => {
+  const kind = req.query.kind
+  const q = String(req.query.q || '').trim().toLocaleLowerCase()
+  const items = catalog.filter(item => (!kind || item.kind === kind) && (!q || (item.name + ' ' + item.category).toLocaleLowerCase().includes(q)))
+  res.json({ items, updatedAt: lastSync, total: items.length })
+})
 app.get('/api/status', (_req, res) => res.json({
   providerConfigured: Boolean(env.XTREAM_BASE_URL && env.XTREAM_USERNAME && env.XTREAM_PASSWORD),
   redistributionAuthorized: env.UPSTREAM_REDISTRIBUTION_AUTHORIZED === 'true',
   catalogItems: catalog.length,
+  mediaProxyConfigured: Boolean(process.env.MEDIAFLOW_BASE_URL && process.env.MEDIAFLOW_API_PASSWORD),
   updatedAt: lastSync
 }))
 
@@ -59,20 +65,25 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
     if (account.user_info?.auth !== 1) throw new Error('provider_auth_failed')
 
     const kinds = [
-      { action: 'get_live_streams', kind: 'live' as const, category: 'قنوات مباشرة' },
-      { action: 'get_vod_streams', kind: 'movie' as const, category: 'أفلام' },
-      { action: 'get_series', kind: 'series' as const, category: 'مسلسلات' }
+      { action: 'get_live_streams', categoryAction: 'get_live_categories', kind: 'live' as const, fallback: 'قنوات مباشرة' },
+      { action: 'get_vod_streams', categoryAction: 'get_vod_categories', kind: 'movie' as const, fallback: 'أفلام' },
+      { action: 'get_series', categoryAction: 'get_series_categories', kind: 'series' as const, fallback: 'مسلسلات' }
     ]
     const next: CatalogItem[] = []
     for (const group of kinds) {
-      const url = apiUrl + '&action=' + group.action
-      const result = await fetch(url, { signal: AbortSignal.timeout(25_000) })
-      if (!result.ok) throw new Error('provider_catalog_error')
-      const rows = await result.json() as Array<{ stream_id?: string | number; series_id?: string | number; name?: string; title?: string }>
+      const [listResponse, categoryResponse] = await Promise.all([
+        fetch(apiUrl + '&action=' + group.action, { signal: AbortSignal.timeout(25_000) }),
+        fetch(apiUrl + '&action=' + group.categoryAction, { signal: AbortSignal.timeout(15_000) })
+      ])
+      if (!listResponse.ok) throw new Error('provider_catalog_error')
+      const rows = await listResponse.json() as Array<{ stream_id?: string | number; series_id?: string | number; name?: string; title?: string; category_id?: string | number }>
+      const categoryRows = categoryResponse.ok ? await categoryResponse.json() as Array<{ category_id?: string | number; category_name?: string }> : []
+      const categories = new Map(categoryRows.map(row => [String(row.category_id ?? ''), String(row.category_name ?? group.fallback)]))
       if (Array.isArray(rows)) for (const row of rows) {
         const id = String(row.stream_id ?? row.series_id ?? '')
         const name = String(row.name ?? row.title ?? '').trim()
-        if (id && name) next.push({ id, name, category: group.category, kind: group.kind })
+        const category = categories.get(String(row.category_id ?? '')) || group.fallback
+        if (id && name) next.push({ id, name, category, kind: group.kind })
       }
     }
     catalog = next
@@ -83,7 +94,19 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
   }
 })
 
-// No upstream playback route is exposed until the authorized media-proxy implementation is deployed.
+app.get('/api/series/:id', async (req, res) => {
+  if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) return res.status(503).json({ error: 'provider_not_configured' })
+  if (!catalog.some(item => item.kind === 'series' && item.id === req.params.id)) return res.status(404).json({ error: 'series_not_found' })
+  try {
+    const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: req.params.id })
+    const response = await fetch(env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php?' + params, { signal: AbortSignal.timeout(20_000) })
+    if (!response.ok) throw new Error('provider_error')
+    res.json(await response.json())
+  } catch { res.status(502).json({ error: 'series_details_unavailable' }) }
+})
+
+// Playback remains disabled until signed MediaFlow URLs can be generated server-side.
+app.all('/api/playback/*', (_req, res) => res.status(503).json({ error: 'media_proxy_not_configured' }))
 app.all('/stream/*', (_req, res) => res.status(503).json({ error: 'media_gateway_not_enabled' }))
 
 app.listen(env.PORT, () => {
