@@ -777,28 +777,42 @@ app.post('/api/playback', async (req, res) => {
   if (env.UPSTREAM_REDISTRIBUTION_AUTHORIZED !== 'true') return res.status(403).json({ error: 'redistribution_not_authorized' })
   if (!env.XTREAM_API_BASE_URL || !env.XTREAM_PROXY_TOKEN) return res.status(503).json({ error: 'cloudflare_proxy_not_configured' })
 
+  let stage = 'initialize'
   try {
     const { kind, id, seriesId } = input.data
     let extension = kind === 'live' ? 'm3u8' : 'mp4'
     const apiBase = env.XTREAM_API_BASE_URL.replace(/\/$/, '')
 
     if (kind === 'series') {
+      stage = 'series_info'
       if (!seriesId) return res.status(400).json({ error: 'series_id_required' })
       const params = new URLSearchParams({ action: 'get_series_info', series_id: seriesId })
       const infoResponse = await xtreamFetch(apiBase + '?' + params, 20_000)
-      if (!infoResponse.ok) throw new Error('series_info_failed')
+      if (!infoResponse.ok) throw new Error('series_info_http_' + infoResponse.status)
       const info = await infoResponse.json() as { episodes?: Record<string, Array<{ id?: string | number; container_extension?: string }>> }
       const episode = Object.values(info.episodes || {}).flat().find(row => String(row.id ?? '') === id)
       if (!episode) return res.status(404).json({ error: 'episode_not_found' })
       extension = String(episode.container_extension || 'mp4').replace(/^\./, '').toLowerCase()
     } else if (kind === 'movie') {
-      const params = new URLSearchParams({ action: 'get_vod_info', vod_id: id })
-      const infoResponse = await xtreamFetch(apiBase + '?' + params, 20_000)
-      if (!infoResponse.ok) throw new Error('movie_info_failed')
-      const info = await infoResponse.json() as { movie_data?: { container_extension?: string }; info?: { container_extension?: string }; container_extension?: string }
-      extension = String(info.movie_data?.container_extension || info.info?.container_extension || info.container_extension || 'mp4').replace(/^\./, '').toLowerCase()
+      // VOD details are optional: some providers reject get_vod_info even when
+      // the catalog and stream endpoints are available. Keep playback URL
+      // creation working with the standard mp4 extension in that case.
+      stage = 'movie_info'
+      try {
+        const params = new URLSearchParams({ action: 'get_vod_info', vod_id: id })
+        const infoResponse = await xtreamFetch(apiBase + '?' + params, 20_000)
+        if (infoResponse.ok) {
+          const info = await infoResponse.json() as { movie_data?: { container_extension?: string }; info?: { container_extension?: string }; container_extension?: string }
+          extension = String(info.movie_data?.container_extension || info.info?.container_extension || info.container_extension || 'mp4').replace(/^\./, '').toLowerCase()
+        } else {
+          console.warn('[vod-info-fallback]', { status: infoResponse.status })
+        }
+      } catch (error) {
+        console.warn('[vod-info-fallback]', { errorName: error instanceof Error ? error.name : 'unknown' })
+      }
     }
 
+    stage = 'build_playback_url'
     if (!/^[a-z0-9]{2,6}$/.test(extension)) extension = kind === 'live' ? 'm3u8' : 'mp4'
     if (kind === 'live') extension = 'm3u8'
 
@@ -812,6 +826,7 @@ app.post('/api/playback', async (req, res) => {
     const transcodeHls = !isLive && ['mkv', 'avi', 'ts'].includes(extension)
     let primaryTarget = upstreamUrl
     if (transcodeHls) {
+      stage = 'mediaflow_url'
       if (!env.MEDIAFLOW_BASE_URL || !env.MEDIAFLOW_API_PASSWORD) return res.status(503).json({ error: 'media_proxy_not_configured_for_transcode' })
       const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\/$/, '')
       primaryTarget = await generateMediaFlowUrl(proxyBase, '/proxy/transcode/playlist.m3u8', upstreamUrl, workerOrigin)
@@ -842,7 +857,12 @@ app.post('/api/playback', async (req, res) => {
       fallbackPlaybackType: isLive ? 'mpegts' : undefined
     })
   } catch (error) {
-    console.error('[playback-url-error]', { kind: input.data.kind, errorName: error instanceof Error ? error.name : 'unknown' })
+    console.error('[playback-url-error]', {
+      kind: input.data.kind,
+      stage,
+      errorName: error instanceof Error ? error.name : 'unknown',
+      errorCode: error instanceof Error && /^[a-z0-9_]{1,80}$/i.test(error.message) ? error.message : undefined
+    })
     res.status(502).json({ error: 'playback_url_generation_failed' })
   }
 })
