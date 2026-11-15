@@ -57,7 +57,7 @@ export default function App() {
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault()
     const message = draft.trim()
-    if (!message || !nickname.trim() || !supabase) return
+    if (!message || !nickname.trim() || !supabase || !selected.id) return
     setChatError('')
     const { error } = await supabase.from('chat_messages').insert({ channel_id: selected.id, display_name: nickname.trim().slice(0, 40), message: message.slice(0, 1000) })
     if (error) setChatError('تعذر إرسال الرسالة الآن. حاول مجدداً.')
@@ -95,7 +95,7 @@ export default function App() {
         </div>
 
         {chatVisible && <aside className="chat-panel"><div className="chat-header"><div className="chat-title"><span className="chat-icon"><MessageCircle size={17}/></span><span><b>دردشة القناة</b><small>تفاعل مع المشاهدين</small></span></div><button className="icon-button" onClick={() => setChatVisible(false)} title="إخفاء الدردشة"><EyeOff size={17}/></button></div><div className="chat-channel"><span className="live-dot"/><b>{selected.name}</b><span>محادثة عامة</span></div><div className="chat-messages">{!supabase && <div className="chat-empty"><MessageCircle size={25}/><b>الدردشة غير متصلة</b><p>أضف إعدادات Supabase في ملف البيئة لتفعيل الدردشة.</p></div>}{supabase && messages.length === 0 && <div className="chat-empty"><Sparkles size={25}/><b>ابدأ التفاعل</b><p>كن أول من يشارك في دردشة هذه القناة.</p></div>}{messages.map(m => <div className="message" key={m.id}><span className="avatar">{m.display_name.slice(0,1)}</span><div><div className="message-head"><b>{m.display_name}</b><time>{new Date(m.created_at).toLocaleTimeString('ar', {hour:'2-digit',minute:'2-digit'})}</time></div><p>{m.message}</p></div></div>)}<div ref={bottomRef}/></div>
-          {!nickname ? <form className="nickname-form" onSubmit={saveName}><label>اختر اسماً للمشاركة</label><input value={nameInput} onChange={e => setNameInput(e.target.value)} maxLength={40} placeholder="اسم العرض"/><button className="gold-button" disabled={!nameInput.trim()}>دخول الدردشة</button></form> : <form className="chat-compose" onSubmit={sendMessage}><input value={draft} onChange={e => setDraft(e.target.value)} maxLength={1000} placeholder={'اكتب رسالة باسم '+nickname}/><button aria-label="إرسال" disabled={!draft.trim() || !supabase}><Send size={17}/></button></form>}
+          {!nickname ? <form className="nickname-form" onSubmit={saveName}><label>اختر اسماً للمشاركة</label><input value={nameInput} onChange={e => setNameInput(e.target.value)} maxLength={40} placeholder="اسم العرض"/><button className="gold-button" disabled={!nameInput.trim()}>دخول الدردشة</button></form> : <form className="chat-compose" onSubmit={sendMessage}><input value={draft} onChange={e => setDraft(e.target.value)} maxLength={1000} placeholder={'اكتب رسالة باسم '+nickname}/><button aria-label="إرسال" disabled={!draft.trim() || !supabase || !selected.id}><Send size={17}/></button></form>}
           {chatError && <p className="chat-error">{chatError}</p>}<div className="chat-foot">كن لطيفاً واستمتع بالمشاهدة <span>✦</span></div></aside>}
       </section>
 
