@@ -411,9 +411,10 @@ async function runCatalogSync() {
       update({ stage: group.kind + '_saving', synced: total })
       let batch: Array<{kind:string;item_id:string;name:string;category:string;extension:string;image_url:string|null}> = []
       for (const row of rows) {
-        const id = String(row.stream_id ?? row.series_id ?? '')
+        const id = String(row.stream_id ?? row.series_id ?? '').trim()
         const name = String(row.name ?? row.title ?? '').trim()
-        if (!id || !name) continue
+        const separatorHeader = /^(?:[-=_.\\s]{3,}|.*(?:^|\\s)[-=]{3,}.*|.*[-=]{3,}$)$/.test(name)
+        if (!/^\\d{1,20}$/.test(id) || !name || separatorHeader) continue
         const rawImage = String(row.stream_icon ?? row.cover ?? row.movie_image ?? '')
         const imageUrl = /^https:/i.test(rawImage) ? rawImage.slice(0, 2048) : null
         batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4'), image_url: imageUrl })
