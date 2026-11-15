@@ -1,0 +1,2 @@
+import { Link } from 'react-router-dom'
+export default function MorePage(){return <section><h1 className="text-4xl font-black">More</h1><div className="mt-6 grid gap-3 sm:grid-cols-2"><Link to="/live" className="rounded-xl border border-white/10 bg-[#13151f] p-5">Countries & Live Categories</Link><Link to="/movies" className="rounded-xl border border-white/10 bg-[#13151f] p-5">My Movie Library</Link></div></section>}

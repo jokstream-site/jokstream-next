@@ -18,7 +18,8 @@ const env = z.object({
   MEDIAFLOW_API_PASSWORD: z.preprocess(value => value === '' ? undefined : value, z.string().min(16).optional()),
   SUPABASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   SUPABASE_ANON_KEY: z.string().optional(),
-  CATALOG_SYNC_SECRET: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional())
+  CATALOG_SYNC_SECRET: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
+  TMDB_API_KEY: z.preprocess(value => value === '' ? undefined : value, z.string().optional())
 }).parse(process.env)
 
 
@@ -180,6 +181,154 @@ app.get('/api/catalog', async (req, res) => {
     res.json(result)
   } catch { res.status(502).json({ error: 'catalog_storage_unavailable' }) }
 })
+
+const artworkCache = new Map<string, { expiresAt: number; value: unknown }>()
+app.get('/api/artwork/:kind', async (req, res) => {
+  const kind = String(req.params.kind)
+  const title = String(req.query.title || '').trim().slice(0, 180)
+  if (!['movie', 'series'].includes(kind) || !title) return res.status(400).json({ error: 'invalid_artwork_request' })
+  const key = kind + ':' + title.toLocaleLowerCase('en')
+  const cached = artworkCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) return res.json(cached.value)
+  if (!env.TMDB_API_KEY) return res.status(503).json({ error: 'tmdb_api_key_not_configured' })
+  try {
+    const endpoint = kind === 'movie' ? 'movie' : 'tv'
+    const url = new URL('https://api.themoviedb.org/3/search/' + endpoint)
+    url.searchParams.set('query', title)
+    url.searchParams.set('include_adult', 'false')
+    url.searchParams.set('language', 'en-US')
+    url.searchParams.set('page', '1')
+    url.searchParams.set('api_key', env.TMDB_API_KEY)
+    const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+    if (!response.ok) throw new Error('tmdb_search_failed')
+    const body = await response.json() as { results?: Array<any> }
+    const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+    const match = (body.results || []).find(item => normalize(String(item.title || item.name || item.original_title || item.original_name || '')) === normalize(title))
+    const value = match ? {
+      matched: true,
+      id: match.id,
+      title: match.title || match.name,
+      poster: match.poster_path ? 'https://image.tmdb.org/t/p/w500' + match.poster_path : null,
+      backdrop: match.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + match.backdrop_path : null,
+      overview: match.overview || '',
+      releaseYear: String(match.release_date || match.first_air_date || '').slice(0, 4),
+      rating: typeof match.vote_average === 'number' ? match.vote_average : null,
+      genres: []
+    } : { matched: false }
+    artworkCache.set(key, { expiresAt: Date.now() + (match ? 24 : 6) * 60 * 60_000, value })
+    res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400')
+    res.json(value)
+  } catch { res.status(502).json({ error: 'tmdb_unavailable' }) }
+})
+
+function cleanCatalogRow(row: any) {
+  const name = String(row?.name || '').trim()
+  const id = String(row?.item_id || row?.id || '').trim()
+  const fakeHeader = /^(?:[-=_.\s]{3,}|.*(?:^|\s)[-=]{3,}.*|.*[-=]{3,}$)$/.test(name)
+  const validId = /^\d{1,20}$/.test(id)
+  return Boolean(name && !fakeHeader && validId)
+}
+async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.Request) {
+  const page = Math.max(1, Math.min(100000, Number(req.query.page) || 1))
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 40))
+  const category = String(req.query.category || '').trim().slice(0, 160)
+  const search = String(req.query.search || '').trim().slice(0, 100)
+  const targetStart = (page - 1) * limit
+  const chunkSize = 500
+  let sourceOffset = 0
+  let acceptedBefore = 0
+  let items: any[] = []
+  let sourceTotal = 0
+  let exhausted = false
+  while (!exhausted && items.length < limit && sourceOffset < 10000000) {
+    const result = await supabaseRpc('jok_catalog_page_filtered', {
+      p_kind: kind, p_query: search, p_category: category, p_limit: chunkSize, p_offset: sourceOffset
+    })
+    const rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
+    sourceTotal = Number(result?.total ?? result?.count ?? sourceTotal)
+    if (!rows.length) { exhausted = true; break }
+    for (const row of rows) {
+      if (!cleanCatalogRow(row)) continue
+      if (acceptedBefore++ < targetStart) continue
+      items.push({ ...row, kind, streamAvailable: true })
+      if (items.length >= limit) break
+    }
+    sourceOffset += rows.length
+    if (rows.length < chunkSize || (sourceTotal > 0 && sourceOffset >= sourceTotal)) exhausted = true
+  }
+  return { items, page, limit, total: sourceTotal, hasMore: !exhausted || items.length === limit }
+}
+for (const [path, kind] of [['/api/live', 'live'], ['/api/movies', 'movie'], ['/api/series', 'series']] as const) {
+  app.get(path, async (req, res) => {
+    if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return res.status(503).json({ error: 'catalog_storage_not_configured' })
+    try {
+      const result = await getPagedCatalog(kind, req)
+      res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=60')
+      res.json(result)
+    } catch { res.status(502).json({ error: 'catalog_storage_unavailable' }) }
+  })
+}
+
+app.get('/api/hero-events', async (_req, res) => {
+  const key = 'hero-events'
+  const cached = artworkCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) return res.json(cached.value)
+  try {
+    const dates = [0, 1].map(offset => {
+      const d = new Date()
+      d.setUTCDate(d.getUTCDate() + offset)
+      return d.toISOString().slice(0, 10)
+    })
+    const feeds = await Promise.all(dates.map(async date => {
+      const url = new URL('https://www.thesportsdb.com/api/v1/json/3/eventsday.php')
+      url.searchParams.set('d', date)
+      url.searchParams.set('s', 'Soccer')
+      const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+      if (!response.ok) return []
+      const body = await response.json() as { events?: any[] | null }
+      return body.events || []
+    }))
+    const events = feeds.flat().map((event: any) => ({
+      id: String(event.idEvent || ''),
+      title: [event.strEvent, event.strLeague].filter(Boolean).join(' · '),
+      homeTeam: event.strHomeTeam || '',
+      awayTeam: event.strAwayTeam || '',
+      competition: event.strLeague || '',
+      start_time: event.strTimestamp || (event.dateEvent && event.strTime ? event.dateEvent + 'T' + event.strTime + 'Z' : null),
+      image: event.strThumb || event.strPoster || null,
+      source: 'TheSportsDB',
+      linked_channel_id: null,
+      channelMatchStatus: 'unmatched'
+    })).filter((event: any) => event.id && event.title && event.start_time && Date.parse(event.start_time) >= Date.now() - 60000)
+    let trendingMovies: any[] = []
+    if (env.TMDB_API_KEY) {
+      try {
+        const trendingUrl = new URL('https://api.themoviedb.org/3/trending/movie/day')
+        trendingUrl.searchParams.set('api_key', env.TMDB_API_KEY)
+        trendingUrl.searchParams.set('language', 'en-US')
+        const trendingResponse = await fetch(trendingUrl, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+        if (trendingResponse.ok) {
+          const trendingBody = await trendingResponse.json() as { results?: any[] }
+          trendingMovies = (trendingBody.results || []).slice(0, 12).map(movie => ({
+            id: String(movie.id),
+            title: movie.title || movie.original_title || 'Untitled movie',
+            overview: movie.overview || '',
+            releaseYear: String(movie.release_date || '').slice(0, 4),
+            rating: typeof movie.vote_average === 'number' ? movie.vote_average : null,
+            poster: movie.poster_path ? 'https://image.tmdb.org/t/p/w500' + movie.poster_path : null,
+            backdrop: movie.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + movie.backdrop_path : null,
+            source: 'TMDB'
+          }))
+        }
+      } catch { /* sports fixtures remain available if TMDB is offline */ }
+    }
+    const payload = { updatedAt: new Date().toISOString(), events, trendingMovies, note: 'Broadcast channels are not inferred; no channel is linked unless a verified provider mapping exists.' }
+    artworkCache.set(key, { expiresAt: Date.now() + 15 * 60_000, value: payload })
+    res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=600')
+    res.json(payload)
+  } catch { res.status(502).json({ error: 'sports_feed_unavailable' }) }
+})
+
 app.get('/api/status', (_req, res) => res.json({
   providerConfigured: Boolean(env.XTREAM_BASE_URL && env.XTREAM_USERNAME && env.XTREAM_PASSWORD),
   adminConfigured: Boolean(env.ADMIN_API_TOKEN),
@@ -284,9 +433,10 @@ async function runCatalogSync() {
       update({ stage: group.kind + '_saving', synced: total })
       let batch: Array<{kind:string;item_id:string;name:string;category:string;extension:string;image_url:string|null}> = []
       for (const row of rows) {
-        const id = String(row.stream_id ?? row.series_id ?? '')
+        const id = String(row.stream_id ?? row.series_id ?? '').trim()
         const name = String(row.name ?? row.title ?? '').trim()
-        if (!id || !name) continue
+        const separatorHeader = /^(?:[-=_.\s]{3,}|.*(?:^|\s)[-=]{3,}.*|.*[-=]{3,}$)$/.test(name)
+        if (!/^\d{1,20}$/.test(id) || !name || separatorHeader) continue
         const rawImage = String(row.stream_icon ?? row.cover ?? row.movie_image ?? '')
         const imageUrl = /^https:/i.test(rawImage) ? rawImage.slice(0, 2048) : null
         batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4'), image_url: imageUrl })

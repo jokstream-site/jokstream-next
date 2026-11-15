@@ -1,0 +1,4 @@
+import { Home, Tv, Film, Clapperboard, CalendarDays } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
+const links=[['/', 'Home',Home],['/live','Live TV',Tv],['/movies','Movies',Film],['/series','Series',Clapperboard],['/events','Events',CalendarDays]] as const
+export default function BottomNav(){return <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#090a0f]/95 px-2 pb-[max(env(safe-area-inset-bottom),8px)] pt-2 backdrop-blur-xl lg:hidden"><div className="mx-auto grid max-w-xl grid-cols-5">{links.map(([to,label,Icon])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>'flex flex-col items-center gap-1 py-2 text-[10px] font-semibold '+(isActive?'text-[#e50914]':'text-white/45')}><Icon size={20}/><span>{label}</span></NavLink>)}</div></nav>}
