@@ -59,14 +59,21 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
   if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) {
     res.status(503).json({ error: 'provider_not_configured' }); return
   }
+
+  let stage = 'account_request'
   try {
     const base = env.XTREAM_BASE_URL.replace(/\/$/, '')
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD })
     const apiUrl = base + '/player_api.php?' + params.toString()
     const response = await fetch(apiUrl, { signal: AbortSignal.timeout(15_000) })
-    if (!response.ok) throw new Error('provider_http_error')
+    if (!response.ok) {
+      res.status(502).json({ error: 'provider_http_' + response.status + '_account' }); return
+    }
+    stage = 'account_json'
     const account = await response.json() as { user_info?: { auth?: number } }
-    if (account.user_info?.auth !== 1) throw new Error('provider_auth_failed')
+    if (account.user_info?.auth !== 1) {
+      res.status(502).json({ error: 'provider_auth_failed' }); return
+    }
 
     const kinds = [
       { action: 'get_live_streams', categoryAction: 'get_live_categories', kind: 'live' as const, fallback: 'قنوات مباشرة' },
@@ -75,12 +82,17 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
     ]
     const next: CatalogItem[] = []
     for (const group of kinds) {
+      stage = group.kind + '_streams_request'
       const [listResponse, categoryResponse] = await Promise.all([
         fetch(apiUrl + '&action=' + group.action, { signal: AbortSignal.timeout(25_000) }),
         fetch(apiUrl + '&action=' + group.categoryAction, { signal: AbortSignal.timeout(15_000) })
       ])
-      if (!listResponse.ok) throw new Error('provider_catalog_error')
+      if (!listResponse.ok) {
+        res.status(502).json({ error: 'provider_http_' + listResponse.status + '_' + group.kind }); return
+      }
+      stage = group.kind + '_streams_json'
       const rows = await listResponse.json() as Array<{ stream_id?: string | number; series_id?: string | number; name?: string; title?: string; category_id?: string | number; container_extension?: string }>
+      stage = group.kind + '_categories_json'
       const categoryRows = categoryResponse.ok ? await categoryResponse.json() as Array<{ category_id?: string | number; category_name?: string }> : []
       const categories = new Map(categoryRows.map(row => [String(row.category_id ?? ''), String(row.category_name ?? group.fallback)]))
       if (Array.isArray(rows)) for (const row of rows) {
@@ -93,8 +105,17 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
     catalog = next
     lastSync = new Date().toISOString()
     res.json({ synced: catalog.length, updatedAt: lastSync })
-  } catch {
-    res.status(502).json({ error: 'provider_sync_failed' })
+  } catch (error) {
+    const err = error as { name?: string; cause?: { code?: string } }
+    const timedOut = err.name === 'TimeoutError' || err.name === 'AbortError'
+    const invalidJson = err.name === 'SyntaxError'
+    const errorCode = timedOut
+      ? 'provider_timeout_' + stage
+      : invalidJson
+        ? 'provider_invalid_json_' + stage
+        : 'provider_connection_failed_' + stage
+    console.error('[catalog-sync]', { stage, errorName: err.name || 'unknown', causeCode: err.cause?.code || 'unknown' })
+    res.status(502).json({ error: errorCode })
   }
 })
 
