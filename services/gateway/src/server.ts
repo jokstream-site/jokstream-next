@@ -35,7 +35,7 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'jokstream-gateway' }))
 app.get('/api/catalog', (req, res) => {
-  const kind = req.query.kind
+  const kind = String(req.query.kind || '')
   const q = String(req.query.q || '').trim().toLocaleLowerCase()
   const items = catalog.filter(item => (!kind || item.kind === kind) && (!q || (item.name + ' ' + item.category).toLocaleLowerCase().includes(q)))
   res.json({ items, updatedAt: lastSync, total: items.length })
