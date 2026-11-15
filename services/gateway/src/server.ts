@@ -300,7 +300,29 @@ app.get('/api/hero-events', async (_req, res) => {
       linked_channel_id: null,
       channelMatchStatus: 'unmatched'
     })).filter((event: any) => event.id && event.title && event.start_time && Date.parse(event.start_time) >= Date.now() - 60000)
-    const payload = { updatedAt: new Date().toISOString(), events, note: 'Broadcast channels are not inferred; no channel is linked unless a verified provider mapping exists.' }
+    let trendingMovies: any[] = []
+    if (env.TMDB_API_KEY) {
+      try {
+        const trendingUrl = new URL('https://api.themoviedb.org/3/trending/movie/day')
+        trendingUrl.searchParams.set('api_key', env.TMDB_API_KEY)
+        trendingUrl.searchParams.set('language', 'en-US')
+        const trendingResponse = await fetch(trendingUrl, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+        if (trendingResponse.ok) {
+          const trendingBody = await trendingResponse.json() as { results?: any[] }
+          trendingMovies = (trendingBody.results || []).slice(0, 12).map(movie => ({
+            id: String(movie.id),
+            title: movie.title || movie.original_title || 'Untitled movie',
+            overview: movie.overview || '',
+            releaseYear: String(movie.release_date || '').slice(0, 4),
+            rating: typeof movie.vote_average === 'number' ? movie.vote_average : null,
+            poster: movie.poster_path ? 'https://image.tmdb.org/t/p/w500' + movie.poster_path : null,
+            backdrop: movie.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + movie.backdrop_path : null,
+            source: 'TMDB'
+          }))
+        }
+      } catch { /* sports fixtures remain available if TMDB is offline */ }
+    }
+    const payload = { updatedAt: new Date().toISOString(), events, trendingMovies, note: 'Broadcast channels are not inferred; no channel is linked unless a verified provider mapping exists.' }
     artworkCache.set(key, { expiresAt: Date.now() + 15 * 60_000, value: payload })
     res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=600')
     res.json(payload)
