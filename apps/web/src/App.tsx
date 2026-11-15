@@ -197,6 +197,10 @@ export default function App() {
   }, [selected.id, selected.kind])
 
   useEffect(() => {
+    if (playbackLoading || playbackUrl) document.getElementById('jok-player')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [playbackLoading, playbackUrl])
+
+  useEffect(() => {
     const video = videoRef.current
     if (!video || !playbackUrl) return
     let cancelled = false
@@ -204,16 +208,18 @@ export default function App() {
     if (playbackUrl.includes('.m3u8')) {
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = playbackUrl
+        void video.play().catch(() => undefined)
       } else {
         void import('hls.js').then(({ default: Hls }) => {
           if (cancelled) return
           if (!Hls.isSupported()) { setPlaybackError('This browser does not support HLS playback. Try a modern browser.'); return }
           hls = new Hls({ enableWorker: true, lowLatencyMode: true })
           hls.loadSource(playbackUrl); hls.attachMedia(video)
+          hls.on(Hls.Events.MANIFEST_PARSED, () => { void video.play().catch(() => undefined) })
           hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) setPlaybackError('A playback error occurred. Please try again.') })
         }).catch(() => setPlaybackError('Could not load the HLS playback engine.'))
       }
-    } else video.src = playbackUrl
+    } else { video.src = playbackUrl; void video.play().catch(() => undefined) }
     return () => { cancelled = true; hls?.destroy(); video.pause(); video.removeAttribute('src'); video.load() }
   }, [playbackUrl])
 
