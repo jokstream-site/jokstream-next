@@ -54,7 +54,7 @@ async function supabaseRpc(name: string, body: Record<string, unknown>) {
     } catch {
       detail = responseText.slice(0, 500)
     }
-    const safeDetail = detail.replace(/[\\r\\n\\t]+/g, ' ').replace(/(authorization|apikey|token|password)\s*[:=]\s*[^ ,;]+/ig, '$1=[redacted]').slice(0, 700)
+    const safeDetail = detail.replace(/[\r\n\t]+/g, ' ').replace(/(authorization|apikey|token|password)\s*[:=]\s*[^ ,;]+/ig, '$1=[redacted]').slice(0, 700)
     console.error('[catalog-storage]', { rpc: name, status: response.status, detail: safeDetail })
     throw new Error('catalog_storage_http_' + response.status + (parsedStorageCode(safeDetail) ? '_' + parsedStorageCode(safeDetail) : ''))
   }
@@ -221,7 +221,19 @@ async function lookupArtwork(kind: 'movie' | 'series', title: string) {
   const key = kind + ':' + title.toLocaleLowerCase('en')
   const cached = artworkCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.value
-  if (!env.TMDB_API_KEY) return null
+  if (!env.TMDB_API_KEY) {
+    try {
+      const searchUrl = 'https://v3-cinemeta.strem.io/catalog/' + kind + '/top/search=' + encodeURIComponent(title) + '.json'
+      const response = await fetch(searchUrl, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+      if (!response.ok) return null
+      const body = await response.json() as { metas?: Array<{ id?: string; name?: string; poster?: string; background?: string }> }
+      const normalize = (value: string) => value.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+      const match = (body.metas || []).find(item => item.id && normalize(item.name || '') === normalize(title))
+      const value = match ? { matched: true, title: match.name, poster: match.poster || null, backdrop: match.background || null } : { matched: false }
+      artworkCache.set(key, { expiresAt: Date.now() + (match ? 24 : 6) * 60 * 60_000, value })
+      return value
+    } catch { return null }
+  }
   try {
     const endpoint = kind === 'movie' ? 'movie' : 'tv'
     const url = new URL('https://api.themoviedb.org/3/search/' + endpoint)
