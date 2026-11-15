@@ -1,30 +1,40 @@
 # JokStream
 
-واجهة عربية RTL بهوية سينمائية داكنة وذهبية، مع React/Vite، وخدمة Express Gateway أولية، وإعادة استخدام جدول الدردشة الموجود في مشروع Supabase.
+واجهة مشاهدة عربية RTL بهوية داكنة وذهبية، مبنية بـ React/Vite مع Express Gateway. الواجهة تقرأ الكتالوج من API بدلاً من عرض قنوات تجريبية، وتعيد استخدام جدول الدردشة الحالي في Supabase.
 
-## Repository
+## بنية المشروع
 - `apps/web`: واجهة React + Vite.
-- `services/gateway`: API أولي لفحص الحالة ومزامنة كتالوج Xtream.
-- `spaces/mediaflow-proxy`: قالب Docker Space لتجربة MediaFlow Proxy.
-- `docs/DEPLOY_AR.md`: دليل التشغيل العربي.
-- `docs/PROVIDER_FIELDS_AR.md`: الحقول المطلوبة من مزود الاشتراك.
+- `services/gateway`: API لفحص الحالة، مزامنة كتالوج Xtream مع تصنيفاته، وجلب تفاصيل المسلسلات.
+- `spaces/mediaflow-proxy`: قالب مستقل لتشغيل MediaFlow Proxy.
+- `docs/DEPLOY_AR.md`: دليل الإعداد والنشر.
+- `docs/PROVIDER_FIELDS_AR.md`: بيانات المزود المطلوبة.
 
-## بيانات Xtream
-عند استخدام Xtream Codes تحتاج فقط إلى Server URL وUsername وPassword. لا يلزم رابط M3U منفصل. لا تضع بيانات الاشتراك في GitHub أو المتصفح؛ راجع دليل التشغيل قبل الإعداد.
+## مسارات API الحالية
+- `GET /health`: فحص صحة Gateway.
+- `GET /api/status`: حالة إعداد المزود والكتالوج.
+- `GET /api/catalog?kind=live|movie|series&q=`: تصفية الكتالوج.
+- `POST /api/admin/catalog/sync`: مزامنة الكتالوج، يتطلب Bearer token.
+- `GET /api/series/:id`: تفاصيل المسلسل وحلقاته.
+- `/api/playback/*`: يعيد 503 حالياً حتى يكتمل الربط الآمن بتوقيع روابط MediaFlow من جهة الخادم.
 
-## Development
+## إعداد البيئة
+- Gateway: انسخ `services/gateway/.env.example` إلى إعدادات بيئة الخادم.
+- Web: عيّن `VITE_API_BASE_URL` إلى عنوان Gateway، و`VITE_SUPABASE_URL` و`VITE_SUPABASE_ANON_KEY` للدردشة.
+- لا تضع أسرار Xtream أو MediaFlow أو Supabase service-role في متغيرات `VITE_*` أو GitHub.
+
+## التطوير والبناء
 ```bash
 npm install
 npm run dev
+npm run build
+npm run build:gateway
+npm run typecheck:gateway
 ```
 
-## Current readiness — مهم
-هذه نسخة تأسيسية وليست إصداراً إنتاجياً جاهزاً للبث. خدمة Gateway الحالية تنفذ فحص الحالة ومزامنة أولية للكتالوج، لكن مسارات تشغيل القنوات والأفلام والحلقات وربط MediaFlow بالبوابة واختبارات التحمل لم تكتمل بعد. لا تنشر روابط بث للجمهور قبل استكمال ذلك واختباره.
+## حالة الجاهزية
+تم توحيد واجهة المكتبة مع API الكتالوج، وإزالة أسماء القنوات التجريبية، وإضافة تصنيف مزود الخدمة وتفاصيل المسلسلات. **تشغيل الفيديو الفعلي غير مفعّل بعد**: يجب إكمال إنشاء روابط MediaFlow موقعة على الخادم، ثم مشغل HLS/VOD، واختبار البث الحي والأفلام والحلقات قبل النشر العام. لا نعرض مشغلاً يوهم المستخدم بأنه يعمل بينما لا يوجد مسار بث آمن جاهز.
 
-## Deployment
-راجع [دليل التشغيل العربي](docs/DEPLOY_AR.md) و[حقول المزود](docs/PROVIDER_FIELDS_AR.md).
-
-## Security
+## الأمان
 - لا تحفظ كلمات مرور المزود أو مفاتيح service-role في Git.
-- لا تضع أسراراً في متغيرات Vite؛ متغيرات `VITE_*` مكشوفة للمتصفح.
-- لا تفعّل إعادة التوزيع إلا وفق حقوق المزود وشروط الاستضافة.
+- لا تضع أسراراً في متغيرات Vite؛ كل `VITE_*` مكشوف للمتصفح.
+- لا تفعّل إعادة التوزيع إلا ضمن حقوق المزود وشروط الاستضافة.
