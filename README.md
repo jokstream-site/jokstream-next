@@ -15,7 +15,7 @@
 - `GET /api/catalog?kind=live|movie|series&q=`: تصفية الكتالوج.
 - `POST /api/admin/catalog/sync`: مزامنة الكتالوج، يتطلب Bearer token.
 - `GET /api/series/:id`: تفاصيل المسلسل وحلقاته.
-- `/api/playback/*`: يعيد 503 حالياً حتى يكتمل الربط الآمن بتوقيع روابط MediaFlow من جهة الخادم.
+- `POST /api/playback`: يتحقق من عنصر الكتالوج/الحلقة ويطلب رابط MediaFlow مشفراً ومحدود الصلاحية من جهة الخادم؛ يحتاج بيانات Xtream وMediaFlow وأعلام التفويض.
 
 ## إعداد البيئة
 - Gateway: انسخ `services/gateway/.env.example` إلى إعدادات بيئة الخادم.
