@@ -30,8 +30,15 @@ function providerStreamUrl(cfg, pathname) {
   return new URL("/" + parts[1] + "/" + encodeURIComponent(cfg.username) + "/" +
     encodeURIComponent(cfg.password) + "/" + parts[2], cfg.origin);
 }
-async function proxyProvider(request, cfg, target, env) {
-  if (target.origin !== cfg.origin || !["http:", "https:"].includes(target.protocol)) return json({ error: "Provider target rejected" }, 403);
+const STREAM_CDN_HOSTS = new Set(["burn.arshas.com"]);
+function isAllowedProviderTarget(target, cfg) {
+  if (target.username || target.password || !["http:", "https:"].includes(target.protocol)) return false;
+  if (target.origin === cfg.origin) return true;
+  return target.protocol === "https:" && target.hostname === "burn.arshas.com" &&
+    (target.port === "" || target.port === "443");
+}
+async function proxyProvider(request, cfg, target, env, redirectDepth = 0) {
+  if (!isAllowedProviderTarget(target, cfg)) return json({ error: "Provider target rejected" }, 403);
   const headers = new Headers({
     "User-Agent": "okhttp/5.0.0-alpha.2",
     "Accept": request.headers.get("Accept") || "*/*",
@@ -50,9 +57,10 @@ async function proxyProvider(request, cfg, target, env) {
   if (upstream.status >= 300 && upstream.status < 400) {
     const location = upstream.headers.get("Location");
     if (!location) return json({ error: "Provider redirect missing location" }, 502);
+    if (redirectDepth >= 4) return json({ error: "Provider redirect limit exceeded" }, 502);
     const redirected = new URL(location, target);
-    if (redirected.origin !== cfg.origin) return json({ error: "Cross-origin provider redirect rejected" }, 502);
-    return proxyProvider(request, cfg, redirected, env);
+    if (!isAllowedProviderTarget(redirected, cfg)) return json({ error: "Provider redirect target rejected" }, 502);
+    return proxyProvider(request, cfg, redirected, env, redirectDepth + 1);
   }
   const responseHeaders = new Headers(cors);
   for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag", "Content-Disposition"]) {
@@ -67,7 +75,7 @@ async function proxyProvider(request, cfg, target, env) {
     const workerOrigin = new URL(request.url).origin;
     const assetUrl = raw => {
       const resolved = new URL(raw, target);
-      if (resolved.origin !== cfg.origin) throw new Error("Cross-origin HLS resource rejected");
+      if (!isAllowedProviderTarget(resolved, cfg)) throw new Error("HLS resource target rejected");
       const out = new URL("/asset", workerOrigin);
       out.searchParams.set("url", resolved.toString());
       out.searchParams.set("token", env.JOKSTREAM_PROXY_TOKEN);
