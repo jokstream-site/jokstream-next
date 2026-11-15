@@ -18,7 +18,9 @@
 
 ## أين توضع الأسرار؟
 
-- بيانات Xtream يجب أن توضع كـ Secrets في خدمة Gateway الخاصة بالخادم، بعد نشر نسخة Gateway التي تدعم هذه المتغيرات.
+- بيانات Xtream يجب أن توضع كـ Secrets في خدمة Gateway الخاصة بالخادم.
+- `MEDIAFLOW_BASE_URL` و`MEDIAFLOW_API_PASSWORD` يوضعان كـ Secrets/Environment Variables في Gateway. كلمة مرور MediaFlow نفسها يجب أن تطابق `API_PASSWORD` في MediaFlow.
+- اضبط `ALLOWED_ORIGINS` على نطاق الواجهة المنشور، واضبط `UPSTREAM_REDISTRIBUTION_AUTHORIZED=true` فقط بعد التأكد من أن الاستضافة تسمح بالبث وإعادة التوزيع.
 - `API_PASSWORD` الخاص بـ MediaFlow يوضع في Hugging Face Space الخاص بـ MediaFlow من Settings → Variables and secrets → New secret.
 - مفتاح Supabase anon/publishable فقط يوضع في متغيرات الواجهة. لا تستخدم service_role في الواجهة.
 
