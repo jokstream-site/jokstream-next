@@ -22,6 +22,7 @@ let lastSync: string | null = null
 
 const app = express()
 app.disable('x-powered-by')
+app.set('trust proxy', 1)
 app.use(helmet())
 app.use(cors({ origin: env.ALLOWED_ORIGINS.split(',').map(s => s.trim()), methods: ['GET', 'POST'], allowedHeaders: ['Content-Type', 'Authorization'] }))
 app.use(express.json({ limit: '32kb' }))
