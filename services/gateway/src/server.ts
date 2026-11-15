@@ -287,7 +287,9 @@ async function runCatalogSync() {
         const id = String(row.stream_id ?? row.series_id ?? '')
         const name = String(row.name ?? row.title ?? '').trim()
         if (!id || !name) continue
-        const rawImage = String(row.stream_icon ?? row.cover ?? row.movie_image ?? '')\n        const imageUrl = /^https:\/\//i.test(rawImage) ? rawImage.slice(0, 2048) : null\n        batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4'), image_url: imageUrl })
+        const rawImage = String(row.stream_icon ?? row.cover ?? row.movie_image ?? '')
+        const imageUrl = /^https:/i.test(rawImage) ? rawImage.slice(0, 2048) : null
+        batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4'), image_url: imageUrl })
         if (batch.length >= 100) {
           await supabaseRpc('jok_catalog_sync_batch', { p_token: env.CATALOG_SYNC_SECRET, p_version: version, p_items: batch })
           total += batch.length; batch = []
