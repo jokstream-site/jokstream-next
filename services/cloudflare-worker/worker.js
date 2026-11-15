@@ -26,7 +26,7 @@ function authorized(request, env, url, allowQuery = false) {
 function providerStreamUrl(cfg, pathname) {
   const parts = pathname.split("/").filter(Boolean);
   if (parts.length !== 3 || parts[0] !== "stream" || !["live", "movie", "series"].includes(parts[1])) throw new Error("Invalid stream path");
-  if (!/^\\d{1,20}\\.[a-z0-9]{2,6}$/i.test(parts[2])) throw new Error("Invalid stream identifier");
+  if (!/^\d{1,20}\.[a-z0-9]{2,6}$/i.test(parts[2])) throw new Error("Invalid stream identifier");
   return new URL("/" + parts[1] + "/" + encodeURIComponent(cfg.username) + "/" +
     encodeURIComponent(cfg.password) + "/" + parts[2], cfg.origin);
 }
@@ -61,7 +61,7 @@ async function proxyProvider(request, cfg, target, env) {
   }
   responseHeaders.set("Cache-Control", "no-store");
   const contentType = upstream.headers.get("Content-Type") || "";
-  const isManifest = /mpegurl|vnd\\.apple\\.mpegurl/i.test(contentType) || /\\.m3u8(?:$|[?#])/i.test(target.pathname);
+  const isManifest = /mpegurl|vnd\.apple\.mpegurl/i.test(contentType) || /\.m3u8(?:$|[?#])/i.test(target.pathname);
   if (upstream.ok && isManifest && request.method !== "HEAD") {
     const body = await upstream.text();
     const workerOrigin = new URL(request.url).origin;
@@ -73,14 +73,14 @@ async function proxyProvider(request, cfg, target, env) {
       out.searchParams.set("token", env.JOKSTREAM_PROXY_TOKEN);
       return out.toString();
     };
-    const rewritten = body.split(/\\r?\\n/).map(line => {
+    const rewritten = body.split(/\r?\n/).map(line => {
       const trimmed = line.trim();
       if (!trimmed) return line;
       if (trimmed.startsWith("#")) {
         return line.replace(/URI="([^"]+)"/g, (_m, uri) => 'URI="' + assetUrl(uri) + '"');
       }
       return assetUrl(trimmed);
-    }).join("\\n");
+    }).join("\n");
     responseHeaders.delete("Content-Length");
     responseHeaders.set("Content-Type", "application/vnd.apple.mpegurl");
     return new Response(rewritten, { status: upstream.status, headers: responseHeaders });
@@ -156,7 +156,7 @@ export default {
         const response = await fetch(cfg.playlistUrl, { headers: { "User-Agent": "okhttp/5.0.0-alpha.2" }, redirect: "follow", signal: AbortSignal.timeout(25000) });
         if (!response.ok) return json({ test: "playlist", ok: false, status: response.status });
         const body = await response.text();
-        const names = [...body.matchAll(/#EXTINF:[^,]*,([^\\r\\n]+)/g)].map(match => match[1].trim());
+        const names = [...body.matchAll(/#EXTINF:[^,]*,([^\r\n]+)/g)].map(match => match[1].trim());
         return json({ test: "playlist", ok: true, status: response.status, bytes: new TextEncoder().encode(body).length, entries: names.length, sample: names.slice(0, 8) });
       }
       const map = {
