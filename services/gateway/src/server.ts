@@ -20,6 +20,16 @@ type CatalogItem = { id: string; name: string; category: string; kind: 'live' | 
 let catalog: CatalogItem[] = []
 let lastSync: string | null = null
 
+async function xtreamFetch(url: string, timeoutMs: number) {
+  return fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'okhttp/5.0.0-alpha.2'
+    },
+    signal: AbortSignal.timeout(timeoutMs)
+  })
+}
+
 const app = express()
 app.disable('x-powered-by')
 app.set('trust proxy', 1)
@@ -65,7 +75,7 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
     const base = env.XTREAM_BASE_URL.replace(/\/$/, '')
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD })
     const apiUrl = base + '/player_api.php?' + params.toString()
-    const response = await fetch(apiUrl, { signal: AbortSignal.timeout(15_000) })
+    const response = await xtreamFetch(apiUrl, 15_000)
     if (!response.ok) {
       res.status(502).json({ error: 'provider_http_' + response.status + '_account' }); return
     }
@@ -84,8 +94,8 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
     for (const group of kinds) {
       stage = group.kind + '_streams_request'
       const [listResponse, categoryResponse] = await Promise.all([
-        fetch(apiUrl + '&action=' + group.action, { signal: AbortSignal.timeout(25_000) }),
-        fetch(apiUrl + '&action=' + group.categoryAction, { signal: AbortSignal.timeout(15_000) })
+        xtreamFetch(apiUrl + '&action=' + group.action, 25_000),
+        xtreamFetch(apiUrl + '&action=' + group.categoryAction, 15_000)
       ])
       if (!listResponse.ok) {
         res.status(502).json({ error: 'provider_http_' + listResponse.status + '_' + group.kind }); return
@@ -135,7 +145,7 @@ app.post('/api/playback', async (req, res) => {
     if (input.data.kind === 'series') {
       if (!input.data.seriesId || !catalog.some(item => item.kind === 'series' && item.id === input.data.seriesId)) return res.status(404).json({ error: 'series_not_found' })
       const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: input.data.seriesId })
-      const infoResponse = await fetch(env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php?' + params, { signal: AbortSignal.timeout(20_000) })
+      const infoResponse = await xtreamFetch(env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php?' + params, 20_000)
       if (!infoResponse.ok) throw new Error('series_info_failed')
       const info = await infoResponse.json() as { episodes?: Record<string, Array<{ id?: string | number; episode_num?: number; container_extension?: string }>> }
       const episodes = Object.values(info.episodes || {}).flat()
