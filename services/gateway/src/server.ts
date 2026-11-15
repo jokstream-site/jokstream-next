@@ -15,12 +15,12 @@ const env = z.object({
   XTREAM_PASSWORD: z.string().optional(),
   UPSTREAM_REDISTRIBUTION_AUTHORIZED: z.enum(['true', 'false']).default('false'),
   MEDIAFLOW_BASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
-  MEDIAFLOW_API_PASSWORD: z.preprocess(value => value === '' ? undefined : value, z.string().min(16).optional())
+  MEDIAFLOW_API_PASSWORD: z.preprocess(value => value === '' ? undefined : value, z.string().min(16).optional()),
+  SUPABASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
+  SUPABASE_ANON_KEY: z.string().optional(),
+  CATALOG_SYNC_SECRET: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional())
 }).parse(process.env)
 
-type CatalogItem = { id: string; name: string; category: string; kind: 'live' | 'movie' | 'series'; extension?: string }
-let catalog: CatalogItem[] = []
-let lastSync: string | null = null
 
 async function xtreamFetch(url: string, timeoutMs: number) {
   const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': 'okhttp/5.0.0-alpha.2' }
@@ -29,6 +29,18 @@ async function xtreamFetch(url: string, timeoutMs: number) {
     headers,
     signal: AbortSignal.timeout(timeoutMs)
   })
+}
+
+async function supabaseRpc(name: string, body: Record<string, unknown>) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) throw new Error('catalog_storage_not_configured')
+  const response = await fetch(env.SUPABASE_URL.replace(/\\/$/, '') + '/rest/v1/rpc/' + name, {
+    method: 'POST',
+    headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: 'Bearer ' + env.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000)
+  })
+  if (!response.ok) throw new Error('catalog_storage_http_' + response.status)
+  return response.json() as Promise<any>
 }
 
 const app = express()
@@ -57,17 +69,24 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 }
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'jokstream-gateway' }))
-app.get('/api/catalog', (req, res) => {
-  const kind = String(req.query.kind || '')
-  const q = String(req.query.q || '').trim().toLocaleLowerCase()
-  const items = catalog.filter(item => (!kind || item.kind === kind) && (!q || (item.name + ' ' + item.category).toLocaleLowerCase().includes(q)))
-  res.json({ items, updatedAt: lastSync, total: items.length })
+app.get('/api/catalog', async (req, res) => {
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return res.status(503).json({ error: 'catalog_storage_not_configured' })
+  const kindValue = String(req.query.kind || '')
+  const kind = ['live','movie','series'].includes(kindValue) ? kindValue : null
+  const q = String(req.query.q || '').trim().slice(0, 100)
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 60))
+  const offset = Math.max(0, Math.min(10000000, Number(req.query.offset) || 0))
+  try {
+    const result = await supabaseRpc('jok_catalog_page', { p_kind: kind, p_query: q, p_limit: limit, p_offset: offset })
+    res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=60')
+    res.json(result)
+  } catch { res.status(502).json({ error: 'catalog_storage_unavailable' }) }
 })
 app.get('/api/status', (_req, res) => res.json({
   providerConfigured: Boolean(env.XTREAM_BASE_URL && env.XTREAM_USERNAME && env.XTREAM_PASSWORD),
   adminConfigured: Boolean(env.ADMIN_API_TOKEN),
   redistributionAuthorized: env.UPSTREAM_REDISTRIBUTION_AUTHORIZED === 'true',
-  catalogItems: catalog.length,
+  catalogStorageConfigured: Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY && env.CATALOG_SYNC_SECRET),
   mediaProxyConfigured: Boolean(process.env.MEDIAFLOW_BASE_URL && process.env.MEDIAFLOW_API_PASSWORD),
   updatedAt: lastSync
 }))
@@ -133,60 +152,66 @@ let syncState: SyncState = { status: 'idle', stage: 'idle', synced: 0, startedAt
 const trimTrailingSlash = (value: string) => value.endsWith('/') ? value.slice(0, -1) : value
 
 async function runCatalogSync() {
-  const update = (patch: Partial<SyncState>) => {
-    syncState = { ...syncState, ...patch, updatedAt: new Date().toISOString() }
-  }
+  const update = (patch: Partial<SyncState>) => { syncState = { ...syncState, ...patch, updatedAt: new Date().toISOString() } }
   try {
     if (env.UPSTREAM_REDISTRIBUTION_AUTHORIZED !== 'true') throw new Error('provider_redistribution_authorization_required')
     if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) throw new Error('provider_not_configured')
-
+    if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY || !env.CATALOG_SYNC_SECRET) throw new Error('catalog_storage_not_configured')
     update({ stage: 'account_request' })
     const base = env.XTREAM_API_BASE_URL ? trimTrailingSlash(env.XTREAM_API_BASE_URL) : trimTrailingSlash(env.XTREAM_BASE_URL) + '/player_api.php'
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD })
     const apiUrl = base + '?' + params.toString()
     const response = await xtreamFetch(apiUrl, 15_000)
     if (!response.ok) throw new Error('provider_http_' + response.status + '_account')
-    update({ stage: 'account_json' })
     const account = await response.json() as { user_info?: { auth?: number } }
     if (account.user_info?.auth !== 1) throw new Error('provider_auth_failed')
-
-    const kinds = [
+    const version = await supabaseRpc('jok_catalog_sync_begin', { p_token: env.CATALOG_SYNC_SECRET }) as string
+    let total = 0
+    const groups = [
       { action: 'get_live_streams', categoryAction: 'get_live_categories', kind: 'live' as const, fallback: 'قنوات مباشرة' },
       { action: 'get_vod_streams', categoryAction: 'get_vod_categories', kind: 'movie' as const, fallback: 'أفلام' },
       { action: 'get_series', categoryAction: 'get_series_categories', kind: 'series' as const, fallback: 'مسلسلات' }
     ]
-    const next: CatalogItem[] = []
-    for (const group of kinds) {
-      update({ stage: group.kind + '_download', synced: next.length })
+    for (const group of groups) {
+      update({ stage: group.kind + '_download', synced: total })
       const [listResponse, categoryResponse] = await Promise.all([
-        xtreamFetch(apiUrl + '&action=' + group.action, 60_000),
+        xtreamFetch(apiUrl + '&action=' + group.action, 90_000),
         xtreamFetch(apiUrl + '&action=' + group.categoryAction, 30_000)
       ])
       if (!listResponse.ok) throw new Error('provider_http_' + listResponse.status + '_' + group.kind)
-      update({ stage: group.kind + '_processing', synced: next.length })
-      const rows = await listResponse.json() as Array<{ stream_id?: string | number; series_id?: string | number; name?: string; title?: string; category_id?: string | number; container_extension?: string }>
-      const categoryRows = categoryResponse.ok ? await categoryResponse.json() as Array<{ category_id?: string | number; category_name?: string }> : []
+      const rows = await listResponse.json() as Array<{ stream_id?: string|number; series_id?: string|number; name?: string; title?: string; category_id?: string|number; container_extension?: string }>
+      const categoryRows = categoryResponse.ok ? await categoryResponse.json() as Array<{ category_id?: string|number; category_name?: string }> : []
       const categories = new Map(categoryRows.map(row => [String(row.category_id ?? ''), String(row.category_name ?? group.fallback)]))
-      if (Array.isArray(rows)) for (const row of rows) {
+      if (!Array.isArray(rows)) throw new Error('provider_invalid_catalog_' + group.kind)
+      update({ stage: group.kind + '_saving', synced: total })
+      let batch: Array<{kind:string;item_id:string;name:string;category:string;extension:string}> = []
+      for (const row of rows) {
         const id = String(row.stream_id ?? row.series_id ?? '')
         const name = String(row.name ?? row.title ?? '').trim()
-        const category = categories.get(String(row.category_id ?? '')) || group.fallback
-        if (id && name) next.push({ id, name, category, kind: group.kind, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4') })
+        if (!id || !name) continue
+        batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4') })
+        if (batch.length >= 400) {
+          await supabaseRpc('jok_catalog_sync_batch', { p_token: env.CATALOG_SYNC_SECRET, p_version: version, p_items: batch })
+          total += batch.length; batch = []
+          update({ synced: total, stage: group.kind + '_saving' })
+        }
       }
-      update({ stage: group.kind + '_completed', synced: next.length })
+      if (batch.length) {
+        await supabaseRpc('jok_catalog_sync_batch', { p_token: env.CATALOG_SYNC_SECRET, p_version: version, p_items: batch })
+        total += batch.length
+      }
+      update({ stage: group.kind + '_completed', synced: total })
     }
-    catalog = next
-    lastSync = new Date().toISOString()
-    update({ status: 'completed', stage: 'completed', synced: next.length, error: null })
+    const finished = await supabaseRpc('jok_catalog_sync_finish', { p_token: env.CATALOG_SYNC_SECRET, p_version: version }) as { total?: number; updatedAt?: string }
+    update({ status: 'completed', stage: 'completed', synced: Number(finished.total ?? total), error: null })
   } catch (error) {
     const err = error as { name?: string; cause?: { code?: string }; message?: string }
     const timedOut = err.name === 'TimeoutError' || err.name === 'AbortError'
-    const code = err.message?.startsWith('provider_') ? err.message : timedOut ? 'provider_timeout_' + syncState.stage : 'provider_connection_failed_' + syncState.stage
+    const code = err.message?.startsWith('provider_') || err.message?.startsWith('catalog_') ? err.message : timedOut ? 'provider_timeout_' + syncState.stage : 'sync_failed_' + syncState.stage
     console.error('[catalog-sync]', { stage: syncState.stage, errorName: err.name || 'unknown', causeCode: err.cause?.code || 'unknown' })
     update({ status: 'failed', stage: 'failed', error: code })
   }
 }
-
 app.post('/api/admin/catalog/sync', requireAdmin, (_req, res) => {
   if (syncState.status === 'running') {
     res.status(202).json({ status: 'running', stage: syncState.stage, synced: syncState.synced })
@@ -215,7 +240,7 @@ app.post('/api/playback', async (req, res) => {
   try {
     let extension = input.data.kind === 'live' ? 'ts' : 'mp4'
     if (input.data.kind === 'series') {
-      if (!input.data.seriesId || !catalog.some(item => item.kind === 'series' && item.id === input.data.seriesId)) return res.status(404).json({ error: 'series_not_found' })
+      if (!input.data.seriesId) return res.status(400).json({ error: 'series_id_required' })
       const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: input.data.seriesId })
       const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
       const infoResponse = await xtreamFetch(apiBase + '?' + params, 20_000)
@@ -226,9 +251,7 @@ app.post('/api/playback', async (req, res) => {
       if (!episode) return res.status(404).json({ error: 'episode_not_found' })
       extension = episode.container_extension || 'mp4'
     } else {
-      const item = catalog.find(row => row.kind === input.data.kind && row.id === input.data.id)
-      if (!item) return res.status(404).json({ error: 'catalog_item_not_found' })
-      extension = item.extension || extension
+      extension = input.data.kind === 'live' ? 'ts' : 'mp4'
     }
 
     const path = input.data.kind === 'live' ? 'live' : input.data.kind === 'movie' ? 'movie' : 'series'
@@ -259,7 +282,6 @@ app.post('/api/playback', async (req, res) => {
 
 app.get('/api/series/:id', async (req, res) => {
   if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) return res.status(503).json({ error: 'provider_not_configured' })
-  if (!catalog.some(item => item.kind === 'series' && item.id === req.params.id)) return res.status(404).json({ error: 'series_not_found' })
   try {
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: req.params.id })
     const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
