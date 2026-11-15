@@ -119,28 +119,34 @@ app.get('/api/admin/provider/diagnostics', requireAdmin, async (_req, res) => {
   }
 })
 
-app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
-  if (env.UPSTREAM_REDISTRIBUTION_AUTHORIZED !== 'true') {
-    res.status(403).json({ error: 'provider_redistribution_authorization_required' }); return
-  }
-  if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) {
-    res.status(503).json({ error: 'provider_not_configured' }); return
-  }
 
-  let stage = 'account_request'
+type SyncState = {
+  status: 'idle' | 'running' | 'completed' | 'failed'
+  stage: string
+  synced: number
+  startedAt: string | null
+  updatedAt: string | null
+  error: string | null
+}
+let syncState: SyncState = { status: 'idle', stage: 'idle', synced: 0, startedAt: null, updatedAt: null, error: null }
+
+async function runCatalogSync() {
+  const update = (patch: Partial<SyncState>) => {
+    syncState = { ...syncState, ...patch, updatedAt: new Date().toISOString() }
+  }
   try {
-    const base = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+    if (env.UPSTREAM_REDISTRIBUTION_AUTHORIZED !== 'true') throw new Error('provider_redistribution_authorization_required')
+    if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) throw new Error('provider_not_configured')
+
+    update({ stage: 'account_request' })
+    const base = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\\/$/, '') : env.XTREAM_BASE_URL.replace(/\\/$/, '') + '/player_api.php'
     const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD })
     const apiUrl = base + '?' + params.toString()
     const response = await xtreamFetch(apiUrl, 15_000)
-    if (!response.ok) {
-      res.status(502).json({ error: 'provider_http_' + response.status + '_account' }); return
-    }
-    stage = 'account_json'
+    if (!response.ok) throw new Error('provider_http_' + response.status + '_account')
+    update({ stage: 'account_json' })
     const account = await response.json() as { user_info?: { auth?: number } }
-    if (account.user_info?.auth !== 1) {
-      res.status(502).json({ error: 'provider_auth_failed' }); return
-    }
+    if (account.user_info?.auth !== 1) throw new Error('provider_auth_failed')
 
     const kinds = [
       { action: 'get_live_streams', categoryAction: 'get_live_categories', kind: 'live' as const, fallback: 'قنوات مباشرة' },
@@ -149,17 +155,14 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
     ]
     const next: CatalogItem[] = []
     for (const group of kinds) {
-      stage = group.kind + '_streams_request'
+      update({ stage: group.kind + '_download', synced: next.length })
       const [listResponse, categoryResponse] = await Promise.all([
-        xtreamFetch(apiUrl + '&action=' + group.action, 25_000),
-        xtreamFetch(apiUrl + '&action=' + group.categoryAction, 15_000)
+        xtreamFetch(apiUrl + '&action=' + group.action, 60_000),
+        xtreamFetch(apiUrl + '&action=' + group.categoryAction, 30_000)
       ])
-      if (!listResponse.ok) {
-        res.status(502).json({ error: 'provider_http_' + listResponse.status + '_' + group.kind }); return
-      }
-      stage = group.kind + '_streams_json'
+      if (!listResponse.ok) throw new Error('provider_http_' + listResponse.status + '_' + group.kind)
+      update({ stage: group.kind + '_processing', synced: next.length })
       const rows = await listResponse.json() as Array<{ stream_id?: string | number; series_id?: string | number; name?: string; title?: string; category_id?: string | number; container_extension?: string }>
-      stage = group.kind + '_categories_json'
       const categoryRows = categoryResponse.ok ? await categoryResponse.json() as Array<{ category_id?: string | number; category_name?: string }> : []
       const categories = new Map(categoryRows.map(row => [String(row.category_id ?? ''), String(row.category_name ?? group.fallback)]))
       if (Array.isArray(rows)) for (const row of rows) {
@@ -168,22 +171,32 @@ app.post('/api/admin/catalog/sync', requireAdmin, async (_req, res) => {
         const category = categories.get(String(row.category_id ?? '')) || group.fallback
         if (id && name) next.push({ id, name, category, kind: group.kind, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4') })
       }
+      update({ stage: group.kind + '_completed', synced: next.length })
     }
     catalog = next
     lastSync = new Date().toISOString()
-    res.json({ synced: catalog.length, updatedAt: lastSync })
+    update({ status: 'completed', stage: 'completed', synced: next.length, error: null })
   } catch (error) {
-    const err = error as { name?: string; cause?: { code?: string } }
+    const err = error as { name?: string; cause?: { code?: string }; message?: string }
     const timedOut = err.name === 'TimeoutError' || err.name === 'AbortError'
-    const invalidJson = err.name === 'SyntaxError'
-    const errorCode = timedOut
-      ? 'provider_timeout_' + stage
-      : invalidJson
-        ? 'provider_invalid_json_' + stage
-        : 'provider_connection_failed_' + stage
-    console.error('[catalog-sync]', { stage, errorName: err.name || 'unknown', causeCode: err.cause?.code || 'unknown' })
-    res.status(502).json({ error: errorCode })
+    const code = err.message?.startsWith('provider_') ? err.message : timedOut ? 'provider_timeout_' + syncState.stage : 'provider_connection_failed_' + syncState.stage
+    console.error('[catalog-sync]', { stage: syncState.stage, errorName: err.name || 'unknown', causeCode: err.cause?.code || 'unknown' })
+    update({ status: 'failed', stage: 'failed', error: code })
   }
+}
+
+app.post('/api/admin/catalog/sync', requireAdmin, (_req, res) => {
+  if (syncState.status === 'running') {
+    res.status(202).json({ status: 'running', stage: syncState.stage, synced: syncState.synced })
+    return
+  }
+  syncState = { status: 'running', stage: 'starting', synced: 0, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), error: null }
+  void runCatalogSync()
+  res.status(202).json({ status: 'running', stage: syncState.stage, synced: 0 })
+})
+
+app.get('/api/admin/catalog/sync/status', requireAdmin, (_req, res) => {
+  res.json(syncState)
 })
 
 app.post('/api/playback', async (req, res) => {
