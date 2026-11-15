@@ -54,8 +54,7 @@ async function supabaseRpc(name: string, body: Record<string, unknown>) {
     } catch {
       detail = responseText.slice(0, 500)
     }
-    const safeDetail = detail.replace(/[\r
-\t]+/g, ' ').replace(/(authorization|apikey|token|password)\s*[:=]\s*[^ ,;]+/ig, '$1=[redacted]').slice(0, 700)
+    const safeDetail = detail.replace(/[\\r\\n\\t]+/g, ' ').replace(/(authorization|apikey|token|password)\s*[:=]\s*[^ ,;]+/ig, '$1=[redacted]').slice(0, 700)
     console.error('[catalog-storage]', { rpc: name, status: response.status, detail: safeDetail })
     throw new Error('catalog_storage_http_' + response.status + (parsedStorageCode(safeDetail) ? '_' + parsedStorageCode(safeDetail) : ''))
   }
@@ -327,7 +326,7 @@ async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.R
         const response = await xtreamFetch(apiBase + '?' + params, 25000)
         if (!response.ok) throw new Error('live_icons_unavailable')
         const rows = await response.json() as Array<{ stream_id?: string | number; stream_icon?: string }>
-        iconMap = new Map((Array.isArray(rows) ? rows : []).map(row => [String(row.stream_id ?? ''), String(row.stream_icon ?? '')]).filter((entry): entry is [string, string] => /^\d+$/.test(entry[0]) && /^https?:\/\//i.test(entry[1])))
+        iconMap = new Map((Array.isArray(rows) ? rows : []).map(row => [String(row.stream_id ?? ''), String(row.stream_icon ?? '')] as [string, string]).filter((entry): entry is [string, string] => /^\d+$/.test(entry[0]) && /^https?:\/\//i.test(entry[1])))
         artworkCache.set(cacheKey, { expiresAt: Date.now() + 30 * 60_000, value: iconMap })
       }
       for (const item of items) item.image_url = item.image_url || iconMap.get(String(item.item_id || item.id)) || null
