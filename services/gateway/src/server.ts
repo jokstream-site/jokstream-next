@@ -154,15 +154,28 @@ app.get('/api/discovery', async (_req, res) => {
 })
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'jokstream-gateway' }))
+app.get('/api/catalog/categories', async (req, res) => {
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return res.status(503).json({ error: 'catalog_storage_not_configured' })
+  const kindValue = String(req.query.kind || '')
+  const kind = ['live','movie','series'].includes(kindValue) ? kindValue : null
+  const q = String(req.query.q || '').trim().slice(0, 100)
+  try {
+    const result = await supabaseRpc('jok_catalog_categories', { p_kind: kind, p_query: q })
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300')
+    res.json(result)
+  } catch { res.status(502).json({ error: 'catalog_categories_unavailable' }) }
+})
+
 app.get('/api/catalog', async (req, res) => {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return res.status(503).json({ error: 'catalog_storage_not_configured' })
   const kindValue = String(req.query.kind || '')
   const kind = ['live','movie','series'].includes(kindValue) ? kindValue : null
   const q = String(req.query.q || '').trim().slice(0, 100)
+  const category = String(req.query.category || '').trim().slice(0, 160)
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 60))
   const offset = Math.max(0, Math.min(10000000, Number(req.query.offset) || 0))
   try {
-    const result = await supabaseRpc('jok_catalog_page', { p_kind: kind, p_query: q, p_limit: limit, p_offset: offset })
+    const result = await supabaseRpc('jok_catalog_page_filtered', { p_kind: kind, p_query: q, p_category: category, p_limit: limit, p_offset: offset })
     res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=60')
     res.json(result)
   } catch { res.status(502).json({ error: 'catalog_storage_unavailable' }) }
