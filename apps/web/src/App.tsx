@@ -31,6 +31,9 @@ export default function App() {
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [selectedEpisodeId, setSelectedEpisodeId] = useState('')
   const [playing, setPlaying] = useState(false)
+  const [showAdmin, setShowAdmin] = useState(false)
+  const [adminToken, setAdminToken] = useState('')
+  const [adminMessage, setAdminMessage] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -102,6 +105,21 @@ export default function App() {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   const filteredChannels = useMemo(() => channels.filter(c => (!search.trim() || (c.name + c.category).toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) && (activeSection === 'home' || (activeSection === 'live' && c.kind === 'live') || (activeSection === 'movies' && c.kind === 'movie') || (activeSection === 'series' && c.kind === 'series') || (activeSection === 'sports' && /رياضة|sport/i.test(c.name + c.category)))), [channels, search, activeSection])
 
+  async function syncCatalog(e: React.FormEvent) {
+    e.preventDefault()
+    setAdminMessage('جارٍ مزامنة مكتبة المزود…')
+    try {
+      const response = await fetch(API + '/api/admin/catalog/sync', { method: 'POST', headers: { Authorization: 'Bearer ' + adminToken } })
+      const result = await response.json() as { synced?: number; error?: string }
+      if (!response.ok) throw new Error(result.error || 'sync_failed')
+      const refreshed = await fetch(API + '/api/catalog')
+      const data = await refreshed.json() as { items?: Array<{id:string;name:string;category:string;kind:'live'|'movie'|'series'}> }
+      const items = (data.items || []).map(item => ({...item, detail:item.category, color:item.kind === 'live' ? 'blue' : item.kind === 'movie' ? 'rose' : 'violet'}))
+      setChannels(items); setSelected(items[0] || emptySelection)
+      setAdminMessage('اكتملت المزامنة: ' + (result.synced || items.length) + ' عنصر.')
+    } catch (error) { setAdminMessage(error instanceof Error && error.message === 'provider_not_configured' ? 'أضف بيانات Xtream إلى أسرار Gateway أولاً.' : error instanceof Error && error.message === 'unauthorized' ? 'رمز الإدارة غير صحيح أو غير مضبوط في الخادم.' : 'تعذرت المزامنة. تحقق من إعدادات المزود والرمز.') }
+  }
+
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault()
     const message = draft.trim()
@@ -149,7 +167,7 @@ export default function App() {
       </section>
 
       <section className="discover-strip"><div className="discover-icon"><Trophy size={23}/></div><div><span className="eyebrow">COMING TO YOUR HOME</span><h3>ليلتك تستحق مشاهدة استثنائية</h3><p>سنضيف الفعاليات والمحتوى المتاح فور ربط مكتبة مزود الخدمة.</p></div><span className="discover-spark">✧</span></section>
-      <footer><a className="footer-brand" href="#">JOK<span>STREAM</span></a><span>© {new Date().getFullYear()} JokStream. جميع الحقوق محفوظة.</span><span className="footer-status"><i/> {apiStatus === 'ready' ? 'API متصل' : apiStatus === 'offline' ? 'API غير متصل' : 'جارٍ الاتصال'}</span></footer>
+      <footer><a className="footer-brand" href="#">JOK<span>STREAM</span></a><button className="admin-link" onClick={() => setShowAdmin(true)}>لوحة الإدارة</button><span>© {new Date().getFullYear()} JokStream. جميع الحقوق محفوظة.</span><span className="footer-status"><i/> {apiStatus === 'ready' ? 'API متصل' : apiStatus === 'offline' ? 'API غير متصل' : 'جارٍ الاتصال'}</span></footer>
     </main>
   </div>
 }
