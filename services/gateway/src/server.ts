@@ -67,7 +67,7 @@ const app = express()
 app.disable('x-powered-by')
 app.set('trust proxy', 1)
 app.use(helmet())
-app.use(cors({ origin: env.ALLOWED_ORIGINS.split(',').map(s => s.trim()), methods: ['GET', 'POST'], allowedHeaders: ['Content-Type', 'Authorization'] }))
+app.use(cors({ origin: env.ALLOWED_ORIGINS.split(',').map(s => s.trim()), methods: ['GET', 'HEAD', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'Range'], exposedHeaders: ['Accept-Ranges', 'Content-Length', 'Content-Range', 'Content-Type'] }))
 app.use(express.json({ limit: '32kb' }))
 app.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false }))
 
