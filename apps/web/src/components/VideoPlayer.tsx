@@ -5,6 +5,7 @@ import { AlertCircle, Maximize, Pause, Play, RotateCcw, Volume2, VolumeX } from 
 type PlaybackState = 'connecting' | 'playing' | 'failed'
 type VideoPlayerProps = {
   src: string
+  streamType?: 'live' | 'movie' | 'series'
   title?: string
   autoPlay?: boolean
   className?: string
@@ -27,7 +28,8 @@ function resolvePlayableUrl(input: string) {
   }
   if (window.location.protocol === 'https:' && parsed.protocol === 'http:') {
     const base = ((import.meta.env.VITE_MEDIAFLOW_URL as string | undefined) || DEFAULT_MEDIAFLOW_URL).replace(/\/+$/, '')
-    return base + '/proxy/hls/manifest.m3u8?d=' + encodeURIComponent(parsed.href)
+    const isHls = /\.m3u8(?:$|[?#])/i.test(parsed.href)
+    return base + (isHls ? '/proxy/hls/manifest.m3u8' : '/proxy/stream') + '?d=' + encodeURIComponent(parsed.href)
   }
   return parsed.href
 }
@@ -41,7 +43,7 @@ function formatTime(seconds: number) {
 }
 
 export default function VideoPlayer({
-  src, title, autoPlay = true, className = '', onStateChange,
+  src, streamType, title, autoPlay = true, className = '', onStateChange,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -139,7 +141,7 @@ export default function VideoPlayer({
     }
 
     watchdogRef.current = setTimeout(() => fail('Connection timed out (15s)'), WATCHDOG_MS)
-    const isHls = /\.m3u8(?:$|[?#])/i.test(playableUrl)
+    const isHls = streamType === 'live' || /\.m3u8(?:$|[?#])/i.test(src) || /\.m3u8(?:$|[?#])/i.test(playableUrl)
 
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({
@@ -180,7 +182,7 @@ export default function VideoPlayer({
       video.load()
       if (autoPlay) void video.play().catch(() => setPaused(true))
     }
-  }, [autoPlay, clearTimers, publishState, src])
+  }, [autoPlay, clearTimers, publishState, src, streamType])
 
   useEffect(() => {
     const generation = ++generationRef.current

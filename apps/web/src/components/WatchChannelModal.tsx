@@ -233,7 +233,7 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
         </header>
 
         <div className="shrink-0 border-b border-white/10 bg-black">
-          <VideoPlayer src={channel.streamUrl} title={channel.name} autoPlay className="max-h-[52vh]" />
+          <VideoPlayer src={channel.streamUrl} streamType="live" title={channel.name} autoPlay className="max-h-[52vh]" />
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col">
