@@ -31,6 +31,11 @@ async function xtreamFetch(url: string, timeoutMs: number) {
   })
 }
 
+function parsedStorageCode(detail: string) {
+  const match = detail.match(/\\b([A-Z0-9]{5})\\b/)
+  return match?.[1]?.toLowerCase() || ''
+}
+
 async function supabaseRpc(name: string, body: Record<string, unknown>) {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) throw new Error('catalog_storage_not_configured')
   const response = await fetch((env.SUPABASE_URL.endsWith('/') ? env.SUPABASE_URL.slice(0, -1) : env.SUPABASE_URL) + '/rest/v1/rpc/' + name, {
@@ -39,8 +44,22 @@ async function supabaseRpc(name: string, body: Record<string, unknown>) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(30_000)
   })
-  if (!response.ok) throw new Error('catalog_storage_http_' + response.status)
-  return response.json() as Promise<any>
+  const responseText = await response.text()
+  if (!response.ok) {
+    // PostgREST error bodies contain the useful SQLSTATE/message. Keep a short,
+    // sanitized diagnostic in server logs so storage failures are actionable.
+    let detail = ''
+    try {
+      const parsed = JSON.parse(responseText) as { code?: string; message?: string; details?: string; hint?: string }
+      detail = [parsed.code, parsed.message, parsed.details, parsed.hint].filter(Boolean).join(' | ')
+    } catch {
+      detail = responseText.slice(0, 500)
+    }
+    const safeDetail = detail.replace(/[\\r\\n\\t]+/g, ' ').replace(/(authorization|apikey|token|password)\\s*[:=]\\s*[^ ,;]+/ig, '$1=[redacted]').slice(0, 700)
+    console.error('[catalog-storage]', { rpc: name, status: response.status, detail: safeDetail })
+    throw new Error('catalog_storage_http_' + response.status + (parsedStorageCode(safeDetail) ? '_' + parsedStorageCode(safeDetail) : ''))
+  }
+  return responseText ? JSON.parse(responseText) as any : null
 }
 
 const app = express()
@@ -190,7 +209,7 @@ async function runCatalogSync() {
         const name = String(row.name ?? row.title ?? '').trim()
         if (!id || !name) continue
         batch.push({ kind: group.kind, item_id: id, name, category: categories.get(String(row.category_id ?? '')) || group.fallback, extension: row.container_extension || (group.kind === 'live' ? 'ts' : 'mp4') })
-        if (batch.length >= 400) {
+        if (batch.length >= 100) {
           await supabaseRpc('jok_catalog_sync_batch', { p_token: env.CATALOG_SYNC_SECRET, p_version: version, p_items: batch })
           total += batch.length; batch = []
           update({ synced: total, stage: group.kind + '_saving' })
