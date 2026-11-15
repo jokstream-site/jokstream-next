@@ -26,6 +26,26 @@
 
 في النسخة الحالية من المستودع، Gateway تقرأ `XTREAM_BASE_URL`, `XTREAM_USERNAME`, `XTREAM_PASSWORD` من بيئة الخادم، لكنها لا توفر بعد صفحة إعدادات آمنة لحفظ بيانات المزود من لوحة الإدارة. لا تضعها في GitHub Secrets على أنها جاهزة للتشغيل ما لم يتم نشر Gateway على runner يقرأ تلك الأسرار فعلاً.
 
+
+## إعداد Gateway للإطلاق التجريبي
+
+في Render → خدمة `jokstream-gateway` → Environment، أضف القيم التالية كمتغيرات بيئة. لا ترسل القيم السرية في المحادثة:
+
+- `ADMIN_API_TOKEN`: رمز عشوائي طويل لا يقل عن 32 حرفاً.
+- `XTREAM_BASE_URL`: رابط Server URL الخاص بالمزود.
+- `XTREAM_USERNAME`: اسم المستخدم.
+- `XTREAM_PASSWORD`: كلمة المرور.
+- `MEDIAFLOW_BASE_URL`: عنوان MediaFlow المنشور مع `https://`.
+- `MEDIAFLOW_API_PASSWORD`: نفس قيمة `API_PASSWORD` في MediaFlow.
+- `UPSTREAM_REDISTRIBUTION_AUTHORIZED=true`: لا تفعّله إلا بعد تحققك من حقوق المزود وشروط الاستضافة معاً.
+- `ALLOWED_ORIGINS=https://jokstream-web.onrender.com`: نطاق الواجهة الحالية.
+
+بعد حفظ المتغيرات، نفّذ Deploy للخدمة. افتح الموقع ثم «لوحة الإدارة» في أسفل الصفحة، والصق `ADMIN_API_TOKEN` واضغط «مزامنة الكتالوج». رمز الإدارة يُستخدم في الجلسة فقط ولا يُحفظ في Local Storage.
+
+## إعداد الواجهة
+
+تم إعداد `VITE_API_BASE_URL` وSupabase URL ومفتاح Supabase Publishable العام في خدمة الواجهة. لا تضع مفتاح `service_role` أو أي كلمة مرور مزود في الواجهة.
+
 ## إنشاء MediaFlow Space
 
 1. أنشئ Hugging Face Space جديداً.
