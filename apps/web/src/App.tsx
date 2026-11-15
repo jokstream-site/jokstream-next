@@ -41,7 +41,7 @@ export default function App() {
     Promise.all([fetch(API + '/api/catalog'), fetch(API + '/api/status')]).then(async ([catalogRes, statusRes]) => {
       if (!catalogRes.ok || !statusRes.ok) throw new Error('api unavailable')
       const catalogData = await catalogRes.json() as { items?: Array<{id:string;name:string;category:string;kind:'live'|'movie'|'series'}> }
-      const statusData = await statusRes.json() as { providerConfigured?: boolean; mediaProxyConfigured?: boolean }
+      const statusData = await statusRes.json() as { providerConfigured?: boolean; mediaProxyConfigured?: boolean; adminConfigured?: boolean }
       if (!alive) return
       const items = (catalogData.items || []).map(item => ({...item, detail: item.category, color: item.kind === 'live' ? 'blue' : item.kind === 'movie' ? 'rose' : 'violet'}))
       setProviderConfigured(Boolean(statusData.providerConfigured)); setMediaProxyConfigured(Boolean(statusData.mediaProxyConfigured)); setApiStatus('ready')
@@ -126,7 +126,20 @@ export default function App() {
       const items = (data.items || []).map(item => ({...item, detail:item.category, color:item.kind === 'live' ? 'blue' : item.kind === 'movie' ? 'rose' : 'violet'}))
       setChannels(items); setSelected(items[0] || emptySelection)
       setAdminMessage('اكتملت المزامنة: ' + (result.synced || items.length) + ' عنصر.')
-    } catch (error) { setAdminMessage(error instanceof Error && error.message === 'provider_not_configured' ? 'أضف بيانات Xtream إلى أسرار Gateway أولاً.' : error instanceof Error && error.message === 'unauthorized' ? 'رمز الإدارة غير صحيح أو غير مضبوط في الخادم.' : 'تعذرت المزامنة. تحقق من إعدادات المزود والرمز.') }
+    } catch (error) {
+      const code = error instanceof Error ? error.message : ''
+      const messages: Record<string, string> = {
+        unauthorized: 'رمز الإدارة غير صحيح أو غير مضبوط في Gateway.',
+        provider_not_configured: 'بيانات Xtream غير مكتملة في أسرار Gateway.',
+        provider_redistribution_authorization_required: 'إعداد السماح بإعادة التوزيع غير مفعّل في Gateway.',
+        provider_auth_failed: 'بيانات دخول Xtream مرفوضة أو غير صحيحة.',
+        provider_http_error: 'عنوان Xtream لا يستجيب بشكل صحيح. تحقق من Server URL.',
+        provider_catalog_error: 'تعذر جلب قوائم المحتوى من Xtream.',
+        provider_timeout: 'انتهت مهلة الاتصال بمزود Xtream.',
+        provider_connection_failed: 'تعذر الاتصال بمزود Xtream. تحقق من عنوان الخادم واتصاله.'
+      }
+      setAdminMessage(messages[code] || ('فشلت المزامنة (' + code + '). تحقق من إعدادات Gateway.'))
+    }
   }
 
   async function sendMessage(e: React.FormEvent) {
