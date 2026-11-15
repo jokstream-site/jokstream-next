@@ -380,6 +380,50 @@ app.post('/api/playback', async (req, res) => {
   }
 })
 
+const metadataCache = new Map<string, { expiresAt: number; value: unknown }>()
+function normalizeMediaTitle(value: string) {
+  return value.toLocaleLowerCase('en').replace(/\\(\\d{4}\\)/g, ' ').replace(/\\b(19|20)\\d{2}\\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\\s+/g, ' ')
+}
+app.get('/api/metadata/:kind', async (req, res) => {
+  const kind = String(req.params.kind)
+  const title = String(req.query.title || '').trim().slice(0, 180)
+  if (!['movie','series'].includes(kind) || !title) return res.status(400).json({ error: 'invalid_metadata_request' })
+  const cacheKey = kind + ':' + title.toLocaleLowerCase('en')
+  const cached = metadataCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    res.setHeader('Cache-Control', 'public, max-age=3600')
+    return res.json(cached.value)
+  }
+  try {
+    const searchUrl = 'https://v3-cinemeta.strem.io/catalog/' + kind + '/top/search=' + encodeURIComponent(title) + '.json'
+    const searchResponse = await fetch(searchUrl, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+    if (!searchResponse.ok) throw new Error('metadata_search_failed')
+    const searchData = await searchResponse.json() as { metas?: Array<{ id?: string; type?: string; name?: string; poster?: string; background?: string; description?: string; releaseInfo?: string; imdbRating?: string; genres?: string[]; runtime?: string; cast?: string[]; director?: string[] }> }
+    const expected = normalizeMediaTitle(title)
+    const candidates = searchData.metas || []
+    const match = candidates.find(item => item.id && normalizeMediaTitle(item.name || '') === expected)
+    if (!match?.id) {
+      const empty = { matched: false }
+      metadataCache.set(cacheKey, { expiresAt: Date.now() + 6 * 60 * 60_000, value: empty })
+      return res.json(empty)
+    }
+    let meta: any = match
+    try {
+      const detailResponse = await fetch('https://v3-cinemeta.strem.io/meta/' + kind + '/' + encodeURIComponent(match.id) + '.json', { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+      if (detailResponse.ok) {
+        const detailData = await detailResponse.json() as { meta?: unknown }
+        if (detailData.meta) meta = detailData.meta
+      }
+    } catch { /* retain the matched catalog metadata */ }
+    const value = { matched: true, meta }
+    metadataCache.set(cacheKey, { expiresAt: Date.now() + 24 * 60 * 60_000, value })
+    res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400')
+    res.json(value)
+  } catch {
+    res.status(502).json({ error: 'metadata_provider_unavailable' })
+  }
+})
+
 app.get('/api/movie/:id', async (req, res) => {
   if (!env.XTREAM_BASE_URL || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) return res.status(503).json({ error: 'provider_not_configured' })
   try {
