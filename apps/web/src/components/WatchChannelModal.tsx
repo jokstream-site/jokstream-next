@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { X, Send, Users, MessageCircle, UserRound, LoaderCircle } from 'lucide-react'
 import VideoPlayer from './VideoPlayer'
 import { supabase } from '../lib/supabase'
@@ -130,6 +130,9 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
     }
 
     let active = true
+    setMessages([])
+    setChatLoading(true)
+    setChatError('')
     const room = supabase
       .channel('chat:' + channelId)
       .on(
@@ -159,7 +162,12 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
       .then(({ data, error }) => {
         if (!active) return
         if (error) setChatError(error.message)
-        else setMessages((data || []).reverse() as ChatMessage[])
+        else {
+          const history = (data || []).reverse() as ChatMessage[]
+          setMessages(current => [...history, ...current]
+            .filter((item, index, all) => all.findIndex(candidate => candidate.id === item.id) === index)
+            .slice(-50))
+        }
         setChatLoading(false)
       })
 
@@ -174,7 +182,7 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
     if (container) container.scrollTop = container.scrollHeight
   }, [messages])
 
-  const chooseNickname = (event: React.FormEvent<HTMLFormElement>) => {
+  const chooseNickname = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const cleaned = nicknameDraft.trim().replace(/\s+/g, ' ').slice(0, 24)
     if (!cleaned) return
@@ -182,7 +190,7 @@ export default function WatchChannelModal({ channel, onClose }: WatchChannelModa
     setNickname(cleaned)
   }
 
-  const sendMessage = async (event: React.FormEvent<HTMLFormElement>) => {
+  const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const content = messageDraft.trim()
     if (!supabase || !nickname || !content || sending) return
