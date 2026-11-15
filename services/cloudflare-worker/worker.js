@@ -97,6 +97,61 @@ async function apiFetch(cfg, params = {}) {
     redirect: "follow", signal: AbortSignal.timeout(25000)
   });
 }
+
+async function probeStream(cfg, id, ext) {
+  const target = new URL("/live/" + encodeURIComponent(cfg.username) + "/" +
+    encodeURIComponent(cfg.password) + "/" + id + "." + ext, cfg.origin);
+  const headers = {
+    "User-Agent": "okhttp/5.0.0-alpha.2",
+    "Accept": "*/*",
+    "Accept-Encoding": "identity",
+    "Referer": cfg.origin + "/",
+    "Origin": cfg.origin
+  };
+  let response;
+  try {
+    response = await fetch(target, { headers, redirect: "manual", signal: AbortSignal.timeout(25000) });
+  } catch (error) {
+    return { format: ext, ok: false, error: error instanceof Error ? error.message : "Fetch failed" };
+  }
+  const result = {
+    format: ext,
+    status: response.status,
+    ok: response.ok,
+    contentType: response.headers.get("Content-Type"),
+    contentLength: response.headers.get("Content-Length"),
+    acceptRanges: response.headers.get("Accept-Ranges")
+  };
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("Location");
+    if (location) {
+      const next = new URL(location, target);
+      result.redirectHost = next.hostname;
+      result.redirectPath = next.pathname;
+      result.redirectCrossOrigin = next.origin !== cfg.origin;
+    }
+    return result;
+  }
+  if (response.ok && ext === "m3u8") {
+    const body = await response.text();
+    const hosts = new Set();
+    for (const line of body.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const uris = trimmed.startsWith("#")
+        ? [...trimmed.matchAll(/URI="([^"]+)"/g)].map(match => match[1])
+        : [trimmed];
+      for (const uri of uris) {
+        try { hosts.add(new URL(uri, target).hostname); } catch {}
+      }
+    }
+    result.manifestBytes = new TextEncoder().encode(body).length;
+    result.resourceHosts = [...hosts].slice(0, 12);
+    result.hasCrossOriginResources = [...hosts].some(host => host !== new URL(cfg.origin).hostname);
+  }
+  return result;
+}
+
 async function inspect(cfg, action, label) {
   const r = await apiFetch(cfg, { action });
   if (!r.ok) return { test: label, ok: false, status: r.status };
@@ -151,6 +206,16 @@ export default {
           ok: true, status: response.status, authenticated: data?.user_info?.auth === 1,
           statusText: data?.user_info?.status || null, expiresAt: data?.user_info?.exp_date || null
         }});
+      }
+
+      if (url.pathname === "/test-stream") {
+        const id = url.searchParams.get("id") || "1981089";
+        if (!/^\\d{1,20}$/.test(id)) return json({ error: "Invalid stream id" }, 400);
+        const [ts, hls] = await Promise.all([
+          probeStream(cfg, id, "ts"),
+          probeStream(cfg, id, "m3u8")
+        ]);
+        return json({ test: "stream", id, results: [ts, hls] });
       }
       if (url.pathname === "/test-playlist") {
         const response = await fetch(cfg.playlistUrl, { headers: { "User-Agent": "okhttp/5.0.0-alpha.2" }, redirect: "follow", signal: AbortSignal.timeout(25000) });
