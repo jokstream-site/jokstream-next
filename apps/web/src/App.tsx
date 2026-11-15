@@ -361,7 +361,7 @@ export default function App() {
             <button className="hero-secondary" onClick={() => {setActiveSection('live');setActiveCategory('All')}}><Radio size={17}/> Browse live TV</button>
           </div>
         </div>
-        <div className="jok-hero-art"><div className="hero-orbit"/><div className="hero-play-mark"><Play fill="currentColor" size={44}/></div><span className="hero-floating one">4K</span><span className="hero-floating two">LIVE</span></div>
+        <div className="jok-hero-art"><CatalogArtwork item={featuredItem}/><div className="hero-orbit"/><div className="hero-play-mark"><Play fill="currentColor" size={44}/></div><span className="hero-floating one">4K</span><span className="hero-floating two">LIVE</span></div>
         <div className="hero-pagination"><i className="active"/><i/><i/><i/></div>
       </section>
 
