@@ -32,7 +32,7 @@ async function xtreamFetch(url: string, timeoutMs: number) {
 }
 
 function parsedStorageCode(detail: string) {
-  const match = detail.match(/\\b([A-Z0-9]{5})\\b/)
+  const match = detail.match(/\b([A-Z0-9]{5})\b/)
   return match?.[1]?.toLowerCase() || ''
 }
 
@@ -46,8 +46,6 @@ async function supabaseRpc(name: string, body: Record<string, unknown>) {
   })
   const responseText = await response.text()
   if (!response.ok) {
-    // PostgREST error bodies contain the useful SQLSTATE/message. Keep a short,
-    // sanitized diagnostic in server logs so storage failures are actionable.
     let detail = ''
     try {
       const parsed = JSON.parse(responseText) as { code?: string; message?: string; details?: string; hint?: string }
@@ -55,7 +53,7 @@ async function supabaseRpc(name: string, body: Record<string, unknown>) {
     } catch {
       detail = responseText.slice(0, 500)
     }
-    const safeDetail = detail.replace(/[\\r\\n\\t]+/g, ' ').replace(/(authorization|apikey|token|password)\\s*[:=]\\s*[^ ,;]+/ig, '$1=[redacted]').slice(0, 700)
+    const safeDetail = detail.replace(/[\r\n\t]+/g, ' ').replace(/(authorization|apikey|token|password)\s*[:=]\s*[^ ,;]+/ig, '$1=[redacted]').slice(0, 700)
     console.error('[catalog-storage]', { rpc: name, status: response.status, detail: safeDetail })
     throw new Error('catalog_storage_http_' + response.status + (parsedStorageCode(safeDetail) ? '_' + parsedStorageCode(safeDetail) : ''))
   }
