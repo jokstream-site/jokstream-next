@@ -108,14 +108,16 @@ app.get('/api/discovery', async (_req, res) => {
       url.searchParams.set('limit', '100')
       const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'JokStream/1.0 (+https://jokstream-web.onrender.com)' }, signal: AbortSignal.timeout(12000) })
       if (!response.ok) return []
-      const body = await response.json() as { fixtures?: any[]; matches?: any[]; data?: any[] }
-      return (body.fixtures || body.matches || body.data || []).map((row: any) => ({
-        id: String(row.id ?? row.slug ?? [sport,row.home,row.away,row.time].join('-')),
+      const body = await response.json() as any
+      const rawRows = Array.isArray(body) ? body : Array.isArray(body.fixtures) ? body.fixtures : Array.isArray(body.matches) ? body.matches : Array.isArray(body.data) ? body.data : Array.isArray(body.data?.fixtures) ? body.data.fixtures : Array.isArray(body.data?.matches) ? body.data.matches : []
+      const teamName = (team: any) => typeof team === 'string' ? team : team?.name ?? team?.short_name ?? team?.display_name ?? ''
+      return rawRows.map((row: any) => ({
+        id: String(row.id ?? row.slug ?? [sport,teamName(row.home ?? row.home_team),teamName(row.away ?? row.away_team),row.time ?? row.startTime].join('-')),
         sport,
-        title: [row.home ?? row.home_team ?? row.participants?.[0]?.name, row.away ?? row.away_team ?? row.participants?.[1]?.name].filter(Boolean).join(' vs '),
-        startsAt: row.time ?? row.start_time ?? row.starting_at ?? row.date ?? null,
-        competition: row.competition?.name ?? row.league?.name ?? row.tournament?.name ?? row.competition_name ?? '',
-        status: row.status ?? 'upcoming',
+        title: [teamName(row.home ?? row.home_team ?? row.participants?.[0]), teamName(row.away ?? row.away_team ?? row.participants?.[1])].filter(Boolean).join(' vs '),
+        startsAt: row.time ?? row.startTime ?? row.start_time ?? row.starting_at ?? row.date_time ?? row.kickoff?.utc ?? row.date ?? null,
+        competition: typeof row.competition === 'string' ? row.competition : row.competition?.name ?? row.league?.name ?? row.tournament?.name ?? row.competition_name ?? '',
+        status: typeof row.status === 'string' ? row.status : row.status?.type ?? 'upcoming',
         source: 'SportScore'
       })).filter((row: any) => row.title && row.startsAt)
     } catch { return [] }
