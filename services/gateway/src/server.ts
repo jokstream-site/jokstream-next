@@ -690,7 +690,7 @@ app.all('/api/stream/:token', async (req, res) => {
       res.end()
     }).pipe(res)
   } catch (error) {
-    console.error('[stream-proxy]', { token: String(req.params.token), errorName: error instanceof Error ? error.name : 'unknown' })
+    console.error('[stream-proxy]', { errorName: error instanceof Error ? error.name : 'unknown' })
     if (!res.headersSent) return res.status(502).json({ error: 'upstream_stream_failed' })
     res.end()
   }
@@ -735,16 +735,17 @@ app.post('/api/playback', async (req, res) => {
 
     const path = kind === 'live' ? 'live' : kind === 'movie' ? 'movie' : 'series'
     const upstreamUrl = new URL('/' + path + '/' + encodeURIComponent(env.XTREAM_USERNAME) + '/' + encodeURIComponent(env.XTREAM_PASSWORD) + '/' + encodeURIComponent(id) + '.' + extension, env.XTREAM_BASE_URL).toString()
-    const isHls = kind === 'live'
+    const isLiveHls = kind === 'live'
+    const transcodeHls = kind !== 'live' && ['mkv', 'avi', 'ts'].includes(extension)
     const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\/$/, '')
     const generated = await fetch(proxyBase + '/generate_url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         mediaflow_proxy_url: proxyBase,
-        endpoint: isHls ? '/proxy/hls/manifest.m3u8' : '/proxy/stream',
+        endpoint: isLiveHls ? '/proxy/hls/manifest.m3u8' : transcodeHls ? '/proxy/transcode/playlist.m3u8' : '/proxy/stream',
         destination_url: upstreamUrl,
-        query_params: ['mkv', 'avi', 'ts'].includes(extension) ? { transcode: 'true' } : {},
+        query_params: {},
         request_headers: { 'User-Agent': 'okhttp/5.0.0-alpha.2', Accept: '*/*' },
         api_password: env.MEDIAFLOW_API_PASSWORD,
         expiration: 1800
@@ -758,7 +759,9 @@ app.post('/api/playback', async (req, res) => {
     const target = new URL(result.url)
     if (target.origin !== new URL(proxyBase).origin) throw new Error('mediaflow_generated_external_url')
     const token = createPlaybackToken(target.toString())
-    const publicUrl = new URL('/api/stream/' + token, req.protocol + '://' + req.get('host')).toString()
+    const publicUrlObject = new URL('/api/stream/' + token, req.protocol + '://' + req.get('host'))
+    if (transcodeHls) publicUrlObject.searchParams.set('format', 'hls')
+    const publicUrl = publicUrlObject.toString()
     console.info('[playback-url]', {
       kind,
       upstream: safeXtreamUrlForLog(upstreamUrl),
@@ -766,7 +769,7 @@ app.post('/api/playback', async (req, res) => {
       frontend: req.protocol + '://' + req.get('host') + '/api/stream/[opaque-token]',
       extension
     })
-    res.json({ url: publicUrl, expiresIn: 1800, kind, extension })
+    res.json({ url: publicUrl, expiresIn: 1800, kind, extension, playbackType: isLiveHls || transcodeHls ? 'hls' : 'file' })
   } catch (error) {
     console.error('[playback-url-error]', { kind: input.data.kind, errorName: error instanceof Error ? error.name : 'unknown' })
     res.status(502).json({ error: 'playback_url_generation_failed' })
