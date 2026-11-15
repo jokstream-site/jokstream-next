@@ -149,7 +149,6 @@ export default function App() {
   }
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
-  useEffect(() => { setVisibleCount(60) }, [activeSection, search])
   const filteredChannels = useMemo(() => activeSection === 'sports' ? channels.filter(c => /رياضة|sport/i.test(c.name + ' ' + c.category)) : channels, [channels, activeSection])
 
   async function syncCatalog(e: React.FormEvent) {
