@@ -3,6 +3,8 @@ import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
 
 const env = z.object({
   PORT: z.coerce.number().int().positive().default(8787),
@@ -217,52 +219,76 @@ app.get('/api/catalog', async (req, res) => {
 })
 
 const artworkCache = new Map<string, { expiresAt: number; value: any }>()
+async function lookupCinemetaArtwork(kind: 'movie' | 'series', title: string) {
+  try {
+    const searchUrl = 'https://v3-cinemeta.strem.io/catalog/' + kind + '/top/search=' + encodeURIComponent(title) + '.json'
+    const response = await fetch(searchUrl, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+    if (!response.ok) return null
+    const body = await response.json() as { metas?: Array<{ id?: string; name?: string; poster?: string; background?: string }> }
+    const normalize = (value: string) => value.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+    const match = (body.metas || []).find(item => item.id && normalize(item.name || '') === normalize(title))
+    if (!match?.id) return { matched: false }
+    let detail: any = null
+    try {
+      const detailResponse = await fetch('https://v3-cinemeta.strem.io/meta/' + kind + '/' + encodeURIComponent(match.id) + '.json', {
+        headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000)
+      })
+      if (detailResponse.ok) detail = (await detailResponse.json() as { meta?: any }).meta
+    } catch { /* retain catalog artwork */ }
+    return {
+      matched: true,
+      title: detail?.name || match.name || title,
+      poster: detail?.poster || match.poster || null,
+      backdrop: detail?.background || match.background || null,
+      overview: detail?.description || '',
+      releaseYear: String(detail?.releaseInfo || '').slice(0, 4),
+      rating: detail?.imdbRating || null
+    }
+  } catch { return null }
+}
+
 async function lookupArtwork(kind: 'movie' | 'series', title: string) {
   const key = kind + ':' + title.toLocaleLowerCase('en')
   const cached = artworkCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.value
-  if (!env.TMDB_API_KEY) {
+
+  let value: any = null
+  if (env.TMDB_API_KEY) {
     try {
-      const searchUrl = 'https://v3-cinemeta.strem.io/catalog/' + kind + '/top/search=' + encodeURIComponent(title) + '.json'
-      const response = await fetch(searchUrl, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
-      if (!response.ok) return null
-      const body = await response.json() as { metas?: Array<{ id?: string; name?: string; poster?: string; background?: string }> }
-      const normalize = (value: string) => value.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
-      const match = (body.metas || []).find(item => item.id && normalize(item.name || '') === normalize(title))
-      const value = match ? { matched: true, title: match.name, poster: match.poster || null, backdrop: match.background || null } : { matched: false }
-      artworkCache.set(key, { expiresAt: Date.now() + (match ? 24 : 6) * 60 * 60_000, value })
-      return value
-    } catch { return null }
+      const endpoint = kind === 'movie' ? 'movie' : 'tv'
+      const url = new URL('https://api.themoviedb.org/3/search/' + endpoint)
+      url.searchParams.set('query', title)
+      url.searchParams.set('include_adult', 'false')
+      url.searchParams.set('language', 'en-US')
+      url.searchParams.set('page', '1')
+      url.searchParams.set('api_key', env.TMDB_API_KEY)
+      const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+      if (response.ok) {
+        const body = await response.json() as { results?: Array<any> }
+        const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+        const match = (body.results || []).find(item => normalize(String(item.title || item.name || item.original_title || item.original_name || '')) === normalize(title))
+        if (match) value = {
+          matched: true,
+          id: match.id,
+          title: match.title || match.name,
+          poster: match.poster_path ? 'https://image.tmdb.org/t/p/w500' + match.poster_path : null,
+          backdrop: match.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + match.backdrop_path : null,
+          overview: match.overview || '',
+          releaseYear: String(match.release_date || match.first_air_date || '').slice(0, 4),
+          rating: typeof match.vote_average === 'number' ? match.vote_average : null,
+          genres: []
+        }
+      }
+    } catch { /* fall back to Cinemeta below */ }
   }
-  try {
-    const endpoint = kind === 'movie' ? 'movie' : 'tv'
-    const url = new URL('https://api.themoviedb.org/3/search/' + endpoint)
-    url.searchParams.set('query', title)
-    url.searchParams.set('include_adult', 'false')
-    url.searchParams.set('language', 'en-US')
-    url.searchParams.set('page', '1')
-    url.searchParams.set('api_key', env.TMDB_API_KEY)
-    const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
-    if (!response.ok) throw new Error('tmdb_search_failed')
-    const body = await response.json() as { results?: Array<any> }
-    const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
-    const match = (body.results || []).find(item => normalize(String(item.title || item.name || item.original_title || item.original_name || '')) === normalize(title))
-    const value = match ? {
-      matched: true,
-      id: match.id,
-      title: match.title || match.name,
-      poster: match.poster_path ? 'https://image.tmdb.org/t/p/w500' + match.poster_path : null,
-      backdrop: match.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + match.backdrop_path : null,
-      overview: match.overview || '',
-      releaseYear: String(match.release_date || match.first_air_date || '').slice(0, 4),
-      rating: typeof match.vote_average === 'number' ? match.vote_average : null,
-      genres: []
-    } : { matched: false }
-    artworkCache.set(key, { expiresAt: Date.now() + (match ? 24 : 6) * 60 * 60_000, value })
-    return value
-  } catch {
-    return null
+
+  if (!value?.poster) {
+    const fallback = await lookupCinemetaArtwork(kind, title)
+    if (fallback?.matched && fallback.poster) value = { ...(value || {}), ...fallback, poster: fallback.poster, source: 'cinemeta' }
   }
+  if (!value) value = { matched: false }
+  artworkCache.set(key, { expiresAt: Date.now() + (value.matched ? 24 : 6) * 60 * 60_000, value })
+  return value
 }
 app.get('/api/artwork/:kind', async (req, res) => {
   const kind = String(req.params.kind)
@@ -564,6 +590,111 @@ app.get('/api/admin/catalog/sync/status', requireAdmin, (_req, res) => {
   res.json(syncState)
 })
 
+type PlaybackTokenEntry = { url: string; expiresAt: number }
+const playbackTokens = new Map<string, PlaybackTokenEntry>()
+const PLAYBACK_TOKEN_TTL_MS = 30 * 60_000
+
+function createPlaybackToken(url: string) {
+  const token = randomUUID()
+  const now = Date.now()
+  for (const [key, entry] of playbackTokens) if (entry.expiresAt <= now) playbackTokens.delete(key)
+  playbackTokens.set(token, { url, expiresAt: now + PLAYBACK_TOKEN_TTL_MS })
+  return token
+}
+
+function safeUrlForLog(value: string) {
+  try {
+    const url = new URL(value)
+    return url.origin + url.pathname + (url.search ? '?[query-redacted]' : '')
+  } catch { return '[invalid-url]' }
+}
+
+function safeXtreamUrlForLog(value: string) {
+  try {
+    const url = new URL(value)
+    const parts = url.pathname.split('/')
+    const streamIndex = parts.findIndex(part => ['live', 'movie', 'series'].includes(part))
+    if (streamIndex >= 0 && parts.length > streamIndex + 2) {
+      parts[streamIndex + 1] = '[username-redacted]'
+      parts[streamIndex + 2] = '[password-redacted]'
+    }
+    return url.origin + parts.join('/')
+  } catch { return '[invalid-url]' }
+}
+
+function setStreamCors(res: express.Response) {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization')
+  res.setHeader('Access-Control-Expose-Headers', 'Accept-Ranges, Content-Length, Content-Range, Content-Type')
+  res.setHeader('Vary', 'Origin')
+}
+
+app.options('/api/stream/:token', (_req, res) => {
+  setStreamCors(res)
+  res.status(204).end()
+})
+
+app.all('/api/stream/:token', async (req, res) => {
+  setStreamCors(res)
+  if (!['GET', 'HEAD'].includes(req.method)) return res.status(405).end()
+  const entry = playbackTokens.get(String(req.params.token))
+  if (!entry || entry.expiresAt <= Date.now()) {
+    playbackTokens.delete(String(req.params.token))
+    return res.status(404).json({ error: 'playback_link_expired' })
+  }
+  const mediaflowBase = env.MEDIAFLOW_BASE_URL
+  if (!mediaflowBase) return res.status(503).json({ error: 'media_proxy_not_configured' })
+  try {
+    const target = new URL(entry.url)
+    if (target.origin !== new URL(mediaflowBase).origin) return res.status(403).json({ error: 'invalid_playback_target' })
+    const headers: Record<string, string> = { 'User-Agent': 'okhttp/5.0.0-alpha.2', Accept: req.header('accept') || '*/*' }
+    const range = req.header('range')
+    if (range) headers.Range = range
+    const upstream = await fetch(target, {
+      method: req.method,
+      headers,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(90_000)
+    })
+    res.status(upstream.status)
+    for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) {
+      const value = upstream.headers.get(header)
+      if (value) res.setHeader(header, value)
+    }
+    res.setHeader('Cache-Control', 'no-store')
+    if (req.method === 'HEAD' || !upstream.body) return res.end()
+
+    const contentType = upstream.headers.get('content-type') || ''
+    const isManifest = /mpegurl|vnd\.apple\.mpegurl/i.test(contentType) || /\.m3u8(?:$|[?#])/i.test(target.pathname)
+    if (isManifest && upstream.ok) {
+      const manifest = await upstream.text()
+      const toGatewayUrl = (raw: string) => {
+        const resolved = new URL(raw, upstream.url || target.toString())
+        if (resolved.origin !== new URL(mediaflowBase).origin) return raw
+        return '/api/stream/' + createPlaybackToken(resolved.toString())
+      }
+      const rewritten = manifest.split(/\r?\n/).map(line => {
+        const trimmed = line.trim()
+        if (!trimmed) return line
+        if (trimmed.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (_match, uri: string) => 'URI="' + toGatewayUrl(uri) + '"')
+        return toGatewayUrl(trimmed)
+      }).join('\n')
+      res.removeHeader('Content-Length')
+      res.setHeader('Content-Type', contentType || 'application/vnd.apple.mpegurl')
+      return res.send(rewritten)
+    }
+    return Readable.fromWeb(upstream.body as any).on('error', () => {
+      if (!res.headersSent) res.status(502)
+      res.end()
+    }).pipe(res)
+  } catch (error) {
+    console.error('[stream-proxy]', { token: String(req.params.token), errorName: error instanceof Error ? error.name : 'unknown' })
+    if (!res.headersSent) return res.status(502).json({ error: 'upstream_stream_failed' })
+    res.end()
+  }
+})
+
 app.post('/api/playback', async (req, res) => {
   const input = z.object({
     kind: z.enum(['live', 'movie', 'series']),
@@ -576,25 +707,34 @@ app.post('/api/playback', async (req, res) => {
   if (!env.MEDIAFLOW_BASE_URL || !env.MEDIAFLOW_API_PASSWORD) return res.status(503).json({ error: 'media_proxy_not_configured' })
 
   try {
-    let extension = input.data.kind === 'live' ? 'm3u8' : 'mp4'
-    if (input.data.kind === 'series') {
-      if (!input.data.seriesId) return res.status(400).json({ error: 'series_id_required' })
-      const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: input.data.seriesId })
-      const apiBase = env.XTREAM_API_BASE_URL ? env.XTREAM_API_BASE_URL.replace(/\/$/, '') : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+    const { kind, id, seriesId } = input.data
+    let extension = kind === 'live' ? 'm3u8' : 'mp4'
+    const apiBase = env.XTREAM_API_BASE_URL
+      ? env.XTREAM_API_BASE_URL.replace(/\/$/, '')
+      : env.XTREAM_BASE_URL.replace(/\/$/, '') + '/player_api.php'
+
+    if (kind === 'series') {
+      if (!seriesId) return res.status(400).json({ error: 'series_id_required' })
+      const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_series_info', series_id: seriesId })
       const infoResponse = await xtreamFetch(apiBase + '?' + params, 20_000)
       if (!infoResponse.ok) throw new Error('series_info_failed')
-      const info = await infoResponse.json() as { episodes?: Record<string, Array<{ id?: string | number; episode_num?: number; container_extension?: string }>> }
-      const episodes = Object.values(info.episodes || {}).flat()
-      const episode = episodes.find(row => String(row.id ?? '') === input.data.id)
+      const info = await infoResponse.json() as { episodes?: Record<string, Array<{ id?: string | number; container_extension?: string }>> }
+      const episode = Object.values(info.episodes || {}).flat().find(row => String(row.id ?? '') === id)
       if (!episode) return res.status(404).json({ error: 'episode_not_found' })
-      extension = episode.container_extension || 'mp4'
-    } else {
-      extension = input.data.kind === 'live' ? 'm3u8' : 'mp4'
+      extension = String(episode.container_extension || 'mp4').replace(/^\./, '').toLowerCase()
+    } else if (kind === 'movie') {
+      const params = new URLSearchParams({ username: env.XTREAM_USERNAME, password: env.XTREAM_PASSWORD, action: 'get_vod_info', vod_id: id })
+      const infoResponse = await xtreamFetch(apiBase + '?' + params, 20_000)
+      if (!infoResponse.ok) throw new Error('movie_info_failed')
+      const info = await infoResponse.json() as { movie_data?: { container_extension?: string }; info?: { container_extension?: string }; container_extension?: string }
+      extension = String(info.movie_data?.container_extension || info.info?.container_extension || info.container_extension || 'mp4').replace(/^\./, '').toLowerCase()
     }
+    if (!/^[a-z0-9]{2,6}$/.test(extension)) extension = kind === 'live' ? 'm3u8' : 'mp4'
+    if (kind === 'live') extension = 'm3u8'
 
-    const path = input.data.kind === 'live' ? 'live' : input.data.kind === 'movie' ? 'movie' : 'series'
-    const upstream = new URL('/' + path + '/' + encodeURIComponent(env.XTREAM_USERNAME) + '/' + encodeURIComponent(env.XTREAM_PASSWORD) + '/' + encodeURIComponent(input.data.id) + '.' + encodeURIComponent(extension), env.XTREAM_BASE_URL).toString()
-    const isHls = extension.toLowerCase() === 'm3u8'
+    const path = kind === 'live' ? 'live' : kind === 'movie' ? 'movie' : 'series'
+    const upstreamUrl = new URL('/' + path + '/' + encodeURIComponent(env.XTREAM_USERNAME) + '/' + encodeURIComponent(env.XTREAM_PASSWORD) + '/' + encodeURIComponent(id) + '.' + extension, env.XTREAM_BASE_URL).toString()
+    const isHls = kind === 'live'
     const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\/$/, '')
     const generated = await fetch(proxyBase + '/generate_url', {
       method: 'POST',
@@ -602,9 +742,9 @@ app.post('/api/playback', async (req, res) => {
       body: JSON.stringify({
         mediaflow_proxy_url: proxyBase,
         endpoint: isHls ? '/proxy/hls/manifest.m3u8' : '/proxy/stream',
-        destination_url: upstream,
-        query_params: (!isHls && ['ts', 'mkv', 'avi'].includes(extension.toLowerCase())) ? { transcode: 'true' } : {},
-        request_headers: { 'User-Agent': 'Mozilla/5.0 JokStream/1.0', Accept: '*/*' },
+        destination_url: upstreamUrl,
+        query_params: ['mkv', 'avi', 'ts'].includes(extension) ? { transcode: 'true' } : {},
+        request_headers: { 'User-Agent': 'okhttp/5.0.0-alpha.2', Accept: '*/*' },
         api_password: env.MEDIAFLOW_API_PASSWORD,
         expiration: 1800
       }),
@@ -613,12 +753,23 @@ app.post('/api/playback', async (req, res) => {
     if (!generated.ok) throw new Error('mediaflow_url_generation_failed')
     const result = await generated.json() as { url?: string }
     if (!result.url) throw new Error('mediaflow_url_missing')
-    res.json({ url: result.url, expiresIn: 1800, kind: input.data.kind })
-  } catch {
+
+    const target = new URL(result.url)
+    if (target.origin !== new URL(proxyBase).origin) throw new Error('mediaflow_generated_external_url')
+    const token = createPlaybackToken(target.toString())
+    const publicUrl = new URL('/api/stream/' + token, req.protocol + '://' + req.get('host')).toString()
+    console.info('[playback-url]', {
+      kind,
+      upstream: safeXtreamUrlForLog(upstreamUrl),
+      mediaflow: safeUrlForLog(target.toString()),
+      frontend: publicUrl
+    })
+    res.json({ url: publicUrl, expiresIn: 1800, kind, extension })
+  } catch (error) {
+    console.error('[playback-url-error]', { kind: input.data.kind, errorName: error instanceof Error ? error.name : 'unknown' })
     res.status(502).json({ error: 'playback_url_generation_failed' })
   }
 })
-
 const metadataCache = new Map<string, { expiresAt: number; value: unknown }>()
 function normalizeMediaTitle(value: string) {
   return value.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
