@@ -6,6 +6,7 @@ import { AlertCircle, Maximize, Pause, Play, RotateCcw, Volume2, VolumeX } from 
 type PlaybackState = 'connecting' | 'playing' | 'failed'
 type VideoPlayerProps = {
   src: string
+  fallbackSrc?: string
   streamType?: 'live' | 'movie' | 'series'
   title?: string
   autoPlay?: boolean
@@ -15,8 +16,7 @@ type VideoPlayerProps = {
 
 const WATCHDOG_MS = 15_000
 const RETRY_DELAY_MS = 2_000
-const MAX_AUTO_RETRIES = 3
-const DEFAULT_MEDIAFLOW_URL = 'https://jokstream-mediaflow.onrender.com'
+const MAX_AUTO_RETRIES = 2
 
 function resolvePlayableUrl(input: string) {
   const streamUrl = input.trim()
@@ -27,10 +27,8 @@ function resolvePlayableUrl(input: string) {
   } catch {
     throw new Error('Invalid stream URL')
   }
-  if (window.location.protocol === 'https:' && parsed.protocol === 'http:') {
-    const base = ((import.meta.env.VITE_MEDIAFLOW_URL as string | undefined) || DEFAULT_MEDIAFLOW_URL).replace(/\/+$/, '')
-    const isHls = /\.m3u8(?:$|[?#])/i.test(parsed.href)
-    return base + (isHls ? '/proxy/hls/manifest.m3u8' : '/proxy/stream') + '?d=' + encodeURIComponent(parsed.href)
+  if (window.location.protocol === 'https:' && parsed.protocol !== 'https:') {
+    throw new Error('Playback URL must use HTTPS and be issued by the Gateway')
   }
   return parsed.href
 }
@@ -44,7 +42,7 @@ function formatTime(seconds: number) {
 }
 
 export default function VideoPlayer({
-  src, streamType, title, autoPlay = true, className = '', onStateChange,
+  src, fallbackSrc, streamType, title, autoPlay = true, className = '', onStateChange,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -52,6 +50,8 @@ export default function VideoPlayer({
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const attemptRef = useRef(0)
+  const sourceIndexRef = useRef(0)
+  const failCurrentAttemptRef = useRef<(message: string) => void>(() => {})
   const generationRef = useRef(0)
 
   const [state, setState] = useState<PlaybackState>('connecting')
@@ -104,7 +104,8 @@ export default function VideoPlayer({
   const startAttempt = useCallback((generation: number) => {
     const video = videoRef.current
     if (!video || generation !== generationRef.current) return
-    if (!src.trim()) {
+    const activeSrc = sourceIndexRef.current === 1 && fallbackSrc ? fallbackSrc : src
+    if (!activeSrc.trim()) {
       publishState('failed', 'No stream URL was provided')
       return
     }
@@ -137,16 +138,21 @@ export default function VideoPlayer({
 
     let playableUrl: string
     try {
-      playableUrl = resolvePlayableUrl(src)
+      playableUrl = resolvePlayableUrl(activeSrc)
     } catch (error) {
       publishState('failed', errorMessage(error))
       return
     }
 
+    let failed = false
     const fail = (message: string) => {
-      if (generation !== generationRef.current) return
+      if (failed || generation !== generationRef.current) return
+      failed = true
       clearTimers()
       if (attemptRef.current <= MAX_AUTO_RETRIES) {
+        if (streamType === 'live' && fallbackSrc) {
+          sourceIndexRef.current = sourceIndexRef.current === 0 ? 1 : 0
+        }
         publishState('connecting', message)
         retryTimerRef.current = setTimeout(() => {
           if (generation === generationRef.current) startAttempt(generation)
@@ -155,11 +161,12 @@ export default function VideoPlayer({
         publishState('failed', message)
       }
     }
+    failCurrentAttemptRef.current = fail
 
     watchdogRef.current = setTimeout(() => fail('Connection timed out (15s)'), WATCHDOG_MS)
-    const sourceUrl = new URL(src, window.location.href)
+    const sourceUrl = new URL(activeSrc, window.location.href)
     const isMpegTs = sourceUrl.searchParams.get('format') === 'mpegts' || /\.ts(?:$|[?#])/i.test(sourceUrl.pathname)
-    const isHls = sourceUrl.searchParams.get('format') === 'hls' || /\.m3u8(?:$|[?#])/i.test(src) || /\.m3u8(?:$|[?#])/i.test(playableUrl)
+    const isHls = sourceUrl.searchParams.get('format') === 'hls' || /\.m3u8(?:$|[?#])/i.test(sourceUrl.pathname) || /\.m3u8(?:$|[?#])/i.test(playableUrl)
 
     if (isMpegTs && mpegts.isSupported()) {
       const player = mpegts.createPlayer({
@@ -173,8 +180,8 @@ export default function VideoPlayer({
         enableStashBuffer: true,
         stashInitialSize: 128 * 1024,
         liveBufferLatencyChasing: true,
-        liveBufferLatencyMaxLatency: 1.5,
-        liveBufferLatencyMinRemain: 0.5,
+        liveBufferLatencyMaxLatency: 8,
+        liveBufferLatencyMinRemain: 2,
       })
       mpegtsRef.current = player
       player.on(mpegts.Events.ERROR, (_type, detail) => {
@@ -189,8 +196,12 @@ export default function VideoPlayer({
     } else if (isHls && Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: true,
-        backBufferLength: 30,
+        lowLatencyMode: false,
+        maxBufferLength: streamType === 'live' ? 32 : 90,
+        maxMaxBufferLength: streamType === 'live' ? 48 : 120,
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 8,
+        backBufferLength: streamType === 'live' ? 15 : 30,
         manifestLoadingTimeOut: WATCHDOG_MS,
         levelLoadingTimeOut: WATCHDOG_MS,
         fragLoadingTimeOut: WATCHDOG_MS,
@@ -225,11 +236,12 @@ export default function VideoPlayer({
       video.load()
       if (autoPlay) void video.play().catch(() => setPaused(true))
     }
-  }, [autoPlay, clearTimers, publishState, src, streamType])
+  }, [autoPlay, clearTimers, fallbackSrc, publishState, src, streamType])
 
   useEffect(() => {
     const generation = ++generationRef.current
     attemptRef.current = 0
+    sourceIndexRef.current = 0
     setRetryCount(0)
     setReason('')
     startAttempt(generation)
@@ -237,7 +249,7 @@ export default function VideoPlayer({
       generationRef.current += 1
       teardown()
     }
-  }, [src, startAttempt, teardown])
+  }, [src, fallbackSrc, startAttempt, teardown])
 
   useEffect(() => {
     const video = videoRef.current
@@ -264,12 +276,7 @@ export default function VideoPlayer({
           : code === MediaError.MEDIA_ERR_DECODE
             ? 'Format unsupported (decode error)'
             : 'Unable to load stream'
-      clearTimers()
-      const generation = generationRef.current
-      if (attemptRef.current <= MAX_AUTO_RETRIES) {
-        publishState('connecting', message)
-        retryTimerRef.current = setTimeout(() => startAttempt(generation), RETRY_DELAY_MS)
-      } else publishState('failed', message)
+      failCurrentAttemptRef.current(message)
     }
     video.addEventListener('playing', onPlaying)
     video.addEventListener('pause', onPause)
@@ -291,6 +298,7 @@ export default function VideoPlayer({
 
   const manualRetry = () => {
     attemptRef.current = 0
+    sourceIndexRef.current = 0
     setRetryCount(0)
     setReason('')
     startAttempt(generationRef.current)
