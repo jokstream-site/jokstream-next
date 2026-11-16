@@ -216,6 +216,59 @@ async function probeStream(cfg, id, ext) {
   }
   return result;
 }
+function firstHlsResource(manifest) {
+  for (const line of manifest.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('#')) {
+      const match = trimmed.match(/\bURI\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^,\s]+))/i);
+      if (match) return match[1] ?? match[2] ?? match[3];
+    } else return trimmed;
+  }
+  return null;
+}
+async function cancelResponseBody(response) {
+  try { if (response.body) { const reader = response.body.getReader(); await reader.read(); await reader.cancel(); } } catch {}
+}
+async function probeHlsPipeline(request, cfg, id, env) {
+  const stages = [];
+  const streamUrl = new URL('/stream/live/' + id + '.m3u8', request.url);
+  try {
+    const streamRequest = new Request(streamUrl, { method: 'GET', headers: { Authorization: 'Bearer ' + env.JOKSTREAM_PROXY_TOKEN, Accept: 'application/vnd.apple.mpegurl,*/*' } });
+    const response = await proxyProvider(streamRequest, cfg, providerStreamUrl(cfg, streamUrl.pathname), env);
+    const contentType = response.headers.get('Content-Type') || '';
+    stages.push({ stage: 'hls_stream', status: response.status, ok: response.ok, contentType });
+    if (!response.ok) { await cancelResponseBody(response); return { id, ok: false, stages }; }
+    const manifest = await response.text();
+    stages.push({ stage: 'manifest_rewrite', ok: manifest.includes('/hls/'), bytes: new TextEncoder().encode(manifest).length });
+    if (!manifest.includes('/hls/')) return { id, ok: false, stages, error: 'manifest_resources_not_rewritten' };
+    let resourcePath = firstHlsResource(manifest);
+    let depth = 0;
+    while (resourcePath && depth < 2) {
+      const resourceUrl = new URL(resourcePath, request.url);
+      if (resourceUrl.origin !== new URL(request.url).origin || !resourceUrl.pathname.startsWith('/hls/')) return { id, ok: false, stages: stages.concat([{ stage: 'hls_resource', ok: false, error: 'resource_not_worker_local' }]) };
+      const token = resourceUrl.pathname.slice('/hls/'.length);
+      const target = await openHlsTarget(token, env.JOKSTREAM_PROXY_TOKEN);
+      if (!isAllowedProviderTarget(target, cfg)) return { id, ok: false, stages: stages.concat([{ stage: 'hls_resource', ok: false, error: 'resource_host_rejected' }]) };
+      const childRequest = new Request(resourceUrl, { method: 'GET', headers: { Accept: 'application/vnd.apple.mpegurl,*/*', Range: 'bytes=0-0' } });
+      const childResponse = await proxyProvider(childRequest, cfg, target, env);
+      const childType = childResponse.headers.get('Content-Type') || '';
+      const isManifest = /mpegurl|vnd\.apple\.mpegurl/i.test(childType) || /\.m3u8(?:$|[?#])/i.test(target.pathname);
+      stages.push({ stage: depth === 0 ? 'first_hls_resource' : 'first_media_resource', status: childResponse.status, ok: childResponse.ok, host: target.hostname, contentType: childType, isManifest });
+      if (!childResponse.ok) { await cancelResponseBody(childResponse); return { id, ok: false, stages }; }
+      if (isManifest) {
+        const childManifest = await childResponse.text();
+        resourcePath = firstHlsResource(childManifest);
+        if (!resourcePath) return { id, ok: false, stages: stages.concat([{ stage: 'nested_manifest', ok: false, error: 'manifest_has_no_resources' }]) };
+      } else { await cancelResponseBody(childResponse); resourcePath = null; }
+      depth++;
+    }
+    return { id, ok: stages.every(stage => stage.ok !== false), stages };
+  } catch (error) {
+    stages.push({ stage: 'pipeline_exception', ok: false, error: error instanceof Error ? error.name : 'fetch_failed' });
+    return { id, ok: false, stages };
+  }
+}
 async function inspect(cfg, action, label) {
   const r = await apiFetch(cfg, { action });
   if (!r.ok) return { test: label, ok: false, status: r.status };
@@ -279,6 +332,11 @@ export default {
         }});
       }
 
+      if (url.pathname === '/test-stream-pipeline') {
+        const id = url.searchParams.get('id') || '1981089';
+        if (!/^\d{1,20}$/.test(id)) return json({ error: 'Invalid stream id' }, 400);
+        return json({ test: 'hls_pipeline', ...(await probeHlsPipeline(request, cfg, id, env)) });
+      }
       if (url.pathname === "/test-stream") {
         const id = url.searchParams.get("id") || "1981089";
         if (!/^\d{1,20}$/.test(id)) return json({ error: "Invalid stream id" }, 400);
