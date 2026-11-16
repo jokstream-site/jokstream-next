@@ -51,7 +51,7 @@ begin
       coalesce(x.overview, '') as overview,
       coalesce(x.poster_path, '') as poster_path,
       coalesce(x.backdrop_path, '') as backdrop_path,
-      lower(regexp_replace(regexp_replace(btrim(x.title), '\\m(19|20)[0-9]{2}\\M', '', 'g'), '[^[:alnum:]]+', ' ', 'g')) as normalized_title
+      lower(regexp_replace(regexp_replace(btrim(x.title), '\m(19|20)[0-9]{2}\M', '', 'g'), '[^[:alnum:]]+', ' ', 'g')) as normalized_title
     from jsonb_to_recordset(p_items) as x(
       tmdb_id bigint,
       title text,
@@ -73,7 +73,7 @@ begin
     select
       i.item_id,
       i.name,
-      lower(regexp_replace(regexp_replace(btrim(i.name), '\\m(19|20)[0-9]{2}\\M', '', 'g'), '[^[:alnum:]]+', ' ', 'g')) as normalized_title
+      lower(regexp_replace(regexp_replace(btrim(i.name), '\m(19|20)[0-9]{2}\M', '', 'g'), '[^[:alnum:]]+', ' ', 'g')) as normalized_title
     from public.jok_catalog_items i
     where i.version_id = v_version
       and i.kind = p_kind
