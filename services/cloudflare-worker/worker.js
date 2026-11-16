@@ -216,6 +216,59 @@ async function probeStream(cfg, id, ext) {
   }
   return result;
 }
+
+async function probePlaylistStream(cfg, id) {
+  const playlist = await fetch(cfg.playlistUrl, {
+    headers: { "User-Agent": "okhttp/5.0.0-alpha.2", Accept: "*/*" },
+    redirect: "follow", signal: AbortSignal.timeout(30000)
+  });
+  if (!playlist.ok) return { ok: false, stage: "playlist", status: playlist.status };
+  const body = await playlist.text();
+  let streamTarget = null;
+  for (const line of body.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    const value = line.trim();
+    if (!value || value.startsWith("#")) continue;
+    try {
+      const candidate = new URL(value, cfg.origin);
+      if (new RegExp("/" + id + "\\.(?:ts|m3u8|mp4)$", "i").test(candidate.pathname)) {
+        streamTarget = candidate;
+        break;
+      }
+    } catch {}
+  }
+  if (!streamTarget) return { ok: false, stage: "playlist_lookup", matched: false };
+  const headers = {
+    "User-Agent": "okhttp/5.0.0-alpha.2", Accept: "*/*", "Accept-Encoding": "identity",
+    Referer: cfg.origin + "/", Origin: cfg.origin
+  };
+  const redirectChain = [];
+  let response;
+  let target = streamTarget;
+  try {
+    for (let depth = 0; depth <= 4; depth++) {
+      if (target.protocol !== "https:" || target.username || target.password) {
+        return { ok: false, stage: "playlist_target", error: "unsafe_target", streamHost: streamTarget.hostname, redirectChain };
+      }
+      response = await fetch(target, { headers, redirect: "manual", signal: AbortSignal.timeout(25000) });
+      if (response.status < 300 || response.status >= 400) break;
+      const location = response.headers.get("Location");
+      redirectChain.push({ status: response.status, host: target.hostname });
+      if (!location || depth === 4) return { ok: false, stage: "playlist_redirect", status: response.status, streamHost: streamTarget.hostname, redirectChain };
+      target = new URL(location, target);
+    }
+  } catch (error) {
+    return { ok: false, stage: "playlist_fetch", error: error instanceof Error ? error.name : "fetch_failed", streamHost: streamTarget.hostname, redirectChain };
+  }
+  const result = {
+    ok: response.ok, stage: "playlist_stream", status: response.status,
+    streamHost: streamTarget.hostname, finalHost: target.hostname,
+    contentType: response.headers.get("Content-Type"),
+    contentLength: response.headers.get("Content-Length"), redirectChain
+  };
+  if (response.body) await response.body.cancel();
+  return result;
+}
+
 function firstHlsResource(manifest) {
   for (const line of manifest.replace(/^\uFEFF/, '').split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -336,6 +389,11 @@ export default {
         const id = url.searchParams.get('id') || '1981089';
         if (!/^\d{1,20}$/.test(id)) return json({ error: 'Invalid stream id' }, 400);
         return json({ test: 'hls_pipeline', ...(await probeHlsPipeline(request, cfg, id, env)) });
+      }
+      if (url.pathname === "/test-playlist-stream") {
+        const id = url.searchParams.get("id") || "1981089";
+        if (!/^\\d{1,20}$/.test(id)) return json({ error: "Invalid stream id" }, 400);
+        return json({ test: "playlist_stream", id, result: await probePlaylistStream(cfg, id) });
       }
       if (url.pathname === "/test-stream") {
         const id = url.searchParams.get("id") || "1981089";
