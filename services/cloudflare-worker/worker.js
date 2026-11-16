@@ -30,11 +30,11 @@ function providerStreamUrl(cfg, pathname) {
   return new URL("/" + parts[1] + "/" + encodeURIComponent(cfg.username) + "/" +
     encodeURIComponent(cfg.password) + "/" + parts[2], cfg.origin);
 }
-const STREAM_CDN_HOSTS = new Set(["burn.arshas.com"]);
+const STREAM_CDN_HOSTS = new Set(["burn.arshas.com", "bpair.arshas.com"]);
 function isAllowedProviderTarget(target, cfg) {
   if (target.username || target.password || !["http:", "https:"].includes(target.protocol)) return false;
   if (target.origin === cfg.origin) return true;
-  return target.protocol === "https:" && target.hostname === "burn.arshas.com" &&
+  return target.protocol === "https:" && STREAM_CDN_HOSTS.has(target.hostname) &&
     (target.port === "" || target.port === "443");
 }
 function bytesToBase64Url(bytes) {
