@@ -30,12 +30,41 @@ function providerStreamUrl(cfg, pathname) {
   return new URL("/" + parts[1] + "/" + encodeURIComponent(cfg.username) + "/" +
     encodeURIComponent(cfg.password) + "/" + parts[2], cfg.origin);
 }
-const STREAM_CDN_HOSTS = new Set(["burn.arshas.com", "bpair.arshas.com"]);
+// Playback destinations come from the authenticated provider's redirects and HLS manifests.
+// CDN hostnames and HTTP/HTTPS may vary between channels; do not maintain a per-CDN allowlist.
+function isPublicProviderHost(hostname) {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  if (!host || host === "localhost" || /\.(?:localhost|local|internal|lan|home\.arpa)$/.test(host)) return false;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) {
+    const octets = host.split(".").map(Number);
+    if (octets.some(value => value > 255)) return false;
+    const [a, b, c] = octets;
+    if (a === 0 || a === 10 || a === 127 || a >= 224 ||
+        (a === 100 && b >= 64 && b <= 127) ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && (b === 168 || (b === 0 && (c === 0 || c === 2)))) ||
+        (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+        (a === 203 && b === 0 && c === 113)) return false;
+    return true;
+  }
+  if (host.startsWith("[") && host.endsWith("]")) {
+    const address = host.slice(1, -1);
+    return /^2[0-9a-f]{3}:/i.test(address) && !/^2001:db8:/i.test(address);
+  }
+  return host.includes(".") && !host.includes("..");
+}
 function isAllowedProviderTarget(target, cfg) {
   if (target.username || target.password || !["http:", "https:"].includes(target.protocol)) return false;
   if (target.origin === cfg.origin) return true;
-  return target.protocol === "https:" && STREAM_CDN_HOSTS.has(target.hostname) &&
-    (target.port === "" || target.port === "443");
+  return isPublicProviderHost(target.hostname);
+}
+// The generic asset endpoint remains on its previous narrow policy; playback uses provider-origin trust.
+const ASSET_CDN_HOSTS = new Set(["burn.arshas.com", "bpair.arshas.com"]);
+function isAllowedAssetTarget(target, cfg) {
+  if (target.username || target.password || target.protocol !== "https:") return false;
+  if (target.origin === cfg.origin) return true;
+  return ASSET_CDN_HOSTS.has(target.hostname) && (target.port === "" || target.port === "443");
 }
 function bytesToBase64Url(bytes) {
   let binary = "";
@@ -74,7 +103,7 @@ async function hlsResourceUrl(target, requestUrl, secret) {
   const token = await sealHlsTarget(target.toString(), secret);
   return new URL("/hls/" + token, requestUrl).toString();
 }
-async function rewriteHlsManifest(body, target, requestUrl, cfg, secret) {
+async function rewriteHlsManifest(body, target, requestUrl, cfg, secret, targetPolicy = isAllowedProviderTarget) {
   const lines = body.replace(/^\uFEFF/, "").split(/\r?\n/);
   const output = [];
   for (const line of lines) {
@@ -87,7 +116,7 @@ async function rewriteHlsManifest(body, target, requestUrl, cfg, secret) {
       for (const match of matches) {
         const raw = match[2] ?? match[3] ?? match[4];
         const resolved = new URL(raw, target);
-        if (!isAllowedProviderTarget(resolved, cfg)) throw new Error("HLS manifest contains a disallowed resource URI");
+        if (!targetPolicy(resolved, cfg)) throw new Error("HLS manifest contains a disallowed resource URI");
         const proxyUrl = await hlsResourceUrl(resolved, requestUrl, secret);
         const quote = match[2] !== undefined ? '"' : match[3] !== undefined ? "'" : "";
         rewritten = rewritten.replace(match[0], match[1] + quote + proxyUrl + quote);
@@ -95,7 +124,7 @@ async function rewriteHlsManifest(body, target, requestUrl, cfg, secret) {
       output.push(rewritten);
     } else {
       const resolved = new URL(trimmed, target);
-      if (!isAllowedProviderTarget(resolved, cfg)) throw new Error("HLS manifest contains a disallowed resource URI");
+      if (!targetPolicy(resolved, cfg)) throw new Error("HLS manifest contains a disallowed resource URI");
       const proxyUrl = await hlsResourceUrl(resolved, requestUrl, secret);
       const leading = line.match(/^\s*/)?.[0] || "";
       const trailing = line.match(/\s*$/)?.[0] || "";
@@ -104,8 +133,8 @@ async function rewriteHlsManifest(body, target, requestUrl, cfg, secret) {
   }
   return output.join("\n");
 }
-async function proxyProvider(request, cfg, target, env, redirectDepth = 0) {
-  if (!isAllowedProviderTarget(target, cfg)) return json({ error: "Provider target rejected" }, 403);
+async function proxyProvider(request, cfg, target, env, redirectDepth = 0, targetPolicy = isAllowedProviderTarget) {
+  if (!targetPolicy(target, cfg)) return json({ error: "Provider target rejected" }, 403);
   const headers = new Headers({
     "User-Agent": "okhttp/5.0.0-alpha.2",
     "Accept": request.headers.get("Accept") || "*/*",
@@ -126,8 +155,8 @@ async function proxyProvider(request, cfg, target, env, redirectDepth = 0) {
     if (!location) return json({ error: "Provider redirect missing location" }, 502);
     if (redirectDepth >= 4) return json({ error: "Provider redirect limit exceeded" }, 502);
     const redirected = new URL(location, target);
-    if (!isAllowedProviderTarget(redirected, cfg)) return json({ error: "Provider redirect target rejected" }, 502);
-    return proxyProvider(request, cfg, redirected, env, redirectDepth + 1);
+    if (!targetPolicy(redirected, cfg)) return json({ error: "Provider redirect target rejected" }, 502);
+    return proxyProvider(request, cfg, redirected, env, redirectDepth + 1, targetPolicy);
   }
   const responseHeaders = new Headers(cors);
   for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag", "Content-Disposition"]) {
@@ -139,7 +168,7 @@ async function proxyProvider(request, cfg, target, env, redirectDepth = 0) {
   const isManifest = /mpegurl|vnd\.apple\.mpegurl/i.test(contentType) || /\.m3u8(?:$|[?#])/i.test(target.pathname);
   if (upstream.ok && isManifest && request.method !== "HEAD") {
     const body = await upstream.text();
-    const rewritten = await rewriteHlsManifest(body, target, request.url, cfg, env.JOKSTREAM_PROXY_TOKEN);
+    const rewritten = await rewriteHlsManifest(body, target, request.url, cfg, env.JOKSTREAM_PROXY_TOKEN, targetPolicy);
     responseHeaders.delete("Content-Length");
     responseHeaders.set("Content-Type", "application/vnd.apple.mpegurl");
     return new Response(rewritten, { status: upstream.status, headers: responseHeaders });
@@ -271,7 +300,7 @@ async function probePlaylistStream(cfg, id) {
   let target = streamTarget;
   try {
     for (let depth = 0; depth <= 4; depth++) {
-      if (target.protocol !== "https:" || target.username || target.password) {
+      if (!isAllowedProviderTarget(target, cfg)) {
         return { ok: false, stage: "playlist_target", error: "unsafe_target", streamHost: streamTarget.hostname, matchedBy, redirectChain };
       }
       response = await fetch(target, { headers, redirect: "manual", signal: AbortSignal.timeout(25000) });
@@ -434,7 +463,7 @@ export default {
         const raw = url.searchParams.get("url");
         if (!raw || raw.length > 4096) return json({ error: "Invalid asset URL" }, 400);
         const target = new URL(raw);
-        return proxyProvider(request, cfg, target, env);
+        return proxyProvider(request, cfg, target, env, 0, isAllowedAssetTarget);
       }
       if (url.pathname === "/test") {
         const response = await apiFetch(cfg);
