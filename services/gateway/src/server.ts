@@ -1,4 +1,4 @@
-ort express from 'express'
+import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
@@ -497,7 +497,7 @@ app.get('/api/home-catalog', async (_req, res) => {
         const itemId = String(row.item_id ?? row.id)
         const title = String(row.name || '').trim()
         const existingDate = String(row.release_date || '')
-        const titleYear = title.match(/\\b((?:19|20)\\d{2})\\b/)?.[1] || ''
+        const titleYear = title.match(/\b((?:19|20)\d{2})\b/)?.[1] || ''
         const needsArtwork = !row.image_url && !row.poster_path
         const needsMetadata = !existingDate || typeof row.vote_average !== 'number' || needsArtwork
         const artwork = needsMetadata ? await lookupArtwork(kind, title) : null
