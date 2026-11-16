@@ -581,8 +581,20 @@ async function buildHeroEvents() {
     const entertainmentChannels = channels.filter((channel: any) => /movie|cinema|film|series|drama|hbo|premiere/i.test(String(channel.name) + ' ' + String(channel.category))).slice(0, 12)
     const selectedChannels = Array.from(new Map([...sportsChannels, ...entertainmentChannels].map((channel: any) => [String(channel.item_id || channel.id), channel])).values())
     const epgGroups = await Promise.all(selectedChannels.map(loadProviderChannelEpg))
-    const channelPrograms = epgGroups.flat().sort((a: any, b: any) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
+    let channelPrograms: any[] = epgGroups.flat().sort((a: any, b: any) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
     const norm = (value: string) => value.toLocaleLowerCase('en').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
+    try {
+      const lookup = await supabaseRpc('jok_catalog_match_epg_programs', { p_titles: Array.from(new Set(channelPrograms.map(program => String(program.title).slice(0, 300))).values()).slice(0, 100) })
+      const matches = Array.isArray(lookup) ? lookup : Array.isArray(lookup?.items) ? lookup.items : []
+      const byTitle = new Map(matches.map((match: any) => [norm(String(match.program_title || '')), match]))
+      const recentCutoff = Date.now() - 90 * 24 * 60 * 60_000
+      channelPrograms = channelPrograms.map(program => {
+        const match: any = byTitle.get(norm(String(program.title)))
+        const releaseTime = match?.release_date ? Date.parse(match.release_date) : NaN
+        const recentRelease = Boolean(match && Number.isFinite(releaseTime) && releaseTime >= recentCutoff && releaseTime <= Date.now() + 24 * 60 * 60_000)
+        return { ...program, recentRelease, catalogKind: match?.kind || null, catalogItemId: match?.item_id || null, tmdbRating: typeof match?.vote_average === 'number' ? match.vote_average : null }
+      })
+    } catch { /* EPG remains useful even when recent-release matching is unavailable */ }
     const events = sportsRows.flat().map((event: any) => {
       const title = String(event.strEvent || '')
       const home = norm(String(event.strHomeTeam || ''))
