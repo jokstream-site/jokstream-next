@@ -94,7 +94,7 @@ app.get('/api/discovery', async (_req, res) => {
     return res.json(discoveryCache.payload)
   }
   const today = new Date()
-  const dates = [0, 1, 2].map(offset => {
+  const dates = [0, 1, 2, 3, 4].map(offset => {
     const date = new Date(today)
     date.setUTCDate(date.getUTCDate() + offset)
     return date.toISOString().slice(0, 10)

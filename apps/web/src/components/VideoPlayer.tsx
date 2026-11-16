@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import Hls from 'hls.js'
 import mpegts from 'mpegts.js'
-import { AlertCircle, Maximize, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
+import { AlertCircle, BookmarkPlus, Maximize, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
+import { getDeviceProfile, getNetworkEstimate, getSafeMaxLevel } from '../lib/smartPlayback'
+import { listSavedMoments, saveMoment } from '../lib/moments'
 
 type PlaybackState = 'connecting' | 'playing' | 'failed'
 type VideoPlayerProps = {
@@ -16,7 +18,9 @@ type VideoPlayerProps = {
 
 const WATCHDOG_MS = 15_000
 const RETRY_DELAY_MS = 2_000
-const MAX_AUTO_RETRIES = 2
+const MAX_AUTO_RETRIES = 4
+const CONTROL_HIDE_DELAY_MS = 2_500
+const STALL_RECOVERY_MS = 10_000
 
 function resolvePlayableUrl(input: string) {
   const streamUrl = input.trim()
@@ -90,6 +94,9 @@ export default function VideoPlayer({
   const failCurrentAttemptRef = useRef<(message: string) => void>(() => {})
   const generationRef = useRef(0)
   const attemptTokenRef = useRef(0)
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const controlTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const restoredPositionRef = useRef(false)
 
   const [state, setState] = useState<PlaybackState>('connecting')
   const [reason, setReason] = useState('')
@@ -100,12 +107,19 @@ export default function VideoPlayer({
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [buffered, setBuffered] = useState(0)
+  const [controlsVisible, setControlsVisible] = useState(true)
+  const [momentSaved, setMomentSaved] = useState(false)
+  const [qualityLabel, setQualityLabel] = useState('Auto')
 
   const clearTimers = useCallback(() => {
     if (watchdogRef.current) clearTimeout(watchdogRef.current)
     if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
     watchdogRef.current = null
     retryTimerRef.current = null
+    if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
+    stallTimerRef.current = null
+    if (controlTimerRef.current) clearTimeout(controlTimerRef.current)
+    controlTimerRef.current = null
   }, [])
 
   const publishState = useCallback((next: PlaybackState, message = '') => {
@@ -168,6 +182,7 @@ export default function VideoPlayer({
     attemptRef.current = attemptNumber
     const attemptToken = ++attemptTokenRef.current
     setRetryCount(Math.max(0, attemptNumber - 1))
+    restoredPositionRef.current = false
     setCurrentTime(0)
     setDuration(0)
     setBuffered(0)
@@ -192,9 +207,10 @@ export default function VideoPlayer({
           sourceIndexRef.current = sourceIndexRef.current === 0 ? 1 : 0
         }
         publishState('connecting', message)
+        const retryDelay = Math.min(RETRY_DELAY_MS * Math.pow(2, Math.max(0, attemptRef.current - 1)), 12_000)
         retryTimerRef.current = setTimeout(() => {
           if (generation === generationRef.current) startAttempt(generation)
-        }, RETRY_DELAY_MS)
+        }, retryDelay)
       } else {
         publishState('failed', message)
       }
@@ -216,10 +232,10 @@ export default function VideoPlayer({
       }, {
         enableWorker: true,
         enableStashBuffer: true,
-        stashInitialSize: 128 * 1024,
+        stashInitialSize: 384 * 1024,
         liveBufferLatencyChasing: true,
-        liveBufferLatencyMaxLatency: 8,
-        liveBufferLatencyMinRemain: 2,
+        liveBufferLatencyMaxLatency: 12,
+        liveBufferLatencyMinRemain: 3,
       })
       mpegtsRef.current = player
       player.on(mpegts.Events.ERROR, (_type, detail) => {
@@ -238,18 +254,29 @@ export default function VideoPlayer({
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        maxBufferLength: streamType === 'live' ? 32 : 90,
-        maxMaxBufferLength: streamType === 'live' ? 48 : 120,
+        maxBufferLength: streamType === 'live' ? 45 : 90,
+        maxMaxBufferLength: streamType === 'live' ? 90 : 120,
+        abrEwmaDefaultEstimate: 350_000,
+        abrBandWidthFactor: 0.85,
+        abrBandWidthUpFactor: 0.65,
         liveSyncDurationCount: 3,
         liveMaxLatencyDurationCount: 8,
         backBufferLength: streamType === 'live' ? 15 : 30,
         manifestLoadingTimeOut: WATCHDOG_MS,
         levelLoadingTimeOut: WATCHDOG_MS,
         fragLoadingTimeOut: WATCHDOG_MS,
-        manifestLoadingMaxRetry: 0,
-        levelLoadingMaxRetry: 0,
-        fragLoadingMaxRetry: 0,
+        manifestLoadingMaxRetry: 3,
+        manifestLoadingRetryDelay: 1_000,
+        manifestLoadingMaxRetryTimeout: 10_000,
+        levelLoadingMaxRetry: 3,
+        levelLoadingRetryDelay: 1_000,
+        levelLoadingMaxRetryTimeout: 10_000,
+        fragLoadingMaxRetry: 5,
+        fragLoadingRetryDelay: 1_000,
+        fragLoadingMaxRetryTimeout: 12_000,
       })
+      const profile = getDeviceProfile()
+      hls.autoLevelCapping = getSafeMaxLevel(hls.levels, profile.maxResolution, getNetworkEstimate())
       hlsRef.current = hls
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal || generation !== generationRef.current || attemptToken !== attemptTokenRef.current) return
@@ -312,6 +339,27 @@ export default function VideoPlayer({
     }
     const onPause = () => setPaused(true)
     const onPlay = () => setPaused(false)
+    const scheduleStallRecovery = () => {
+      if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
+      stallTimerRef.current = setTimeout(() => {
+        if (!video.paused && video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+          if (hlsRef.current) hlsRef.current.startLoad(-1)
+          else if (mpegtsRef.current) {
+            try { mpegtsRef.current.unload(); mpegtsRef.current.load(); void Promise.resolve(mpegtsRef.current.play()).catch(() => {}) } catch { /* retry watchdog remains active */ }
+          }
+        }
+      }, STALL_RECOVERY_MS)
+    }
+    const clearStallRecovery = () => {
+      if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
+      stallTimerRef.current = null
+    }
+    const restoreSavedPosition = () => {
+      if (restoredPositionRef.current || streamType === 'live' || !title || !Number.isFinite(video.duration)) return
+      const key = [streamType || 'video', title.trim().toLowerCase()].join(':')
+      const saved = listSavedMoments().find(item => item.mediaKey === key && !item.live && item.position > 5 && item.position < video.duration - 10)
+      if (saved) { video.currentTime = saved.position; restoredPositionRef.current = true }
+    }
     const onTime = () => {
       setCurrentTime(video.currentTime || 0)
       if (Number.isFinite(video.duration)) setDuration(video.duration)
@@ -329,7 +377,11 @@ export default function VideoPlayer({
             : 'Unable to load stream'
       failCurrentAttemptRef.current(message)
     }
+    video.addEventListener('loadedmetadata', restoreSavedPosition)
     video.addEventListener('playing', onPlaying)
+    video.addEventListener('waiting', scheduleStallRecovery)
+    video.addEventListener('stalled', scheduleStallRecovery)
+    video.addEventListener('canplay', clearStallRecovery)
     video.addEventListener('pause', onPause)
     video.addEventListener('play', onPlay)
     video.addEventListener('timeupdate', onTime)
@@ -337,7 +389,11 @@ export default function VideoPlayer({
     video.addEventListener('progress', onTime)
     video.addEventListener('error', onError)
     return () => {
+      video.removeEventListener('loadedmetadata', restoreSavedPosition)
       video.removeEventListener('playing', onPlaying)
+      video.removeEventListener('waiting', scheduleStallRecovery)
+      video.removeEventListener('stalled', scheduleStallRecovery)
+      video.removeEventListener('canplay', clearStallRecovery)
       video.removeEventListener('pause', onPause)
       video.removeEventListener('play', onPlay)
       video.removeEventListener('timeupdate', onTime)
@@ -345,7 +401,61 @@ export default function VideoPlayer({
       video.removeEventListener('progress', onTime)
       video.removeEventListener('error', onError)
     }
-  }, [clearTimers, publishState, startAttempt])
+  }, [clearTimers, publishState, startAttempt, streamType, title])
+
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const profile = getDeviceProfile()
+    let stableSince = Date.now()
+    let lastDropped = 0
+    let lastTotal = 0
+    const timer = window.setInterval(() => {
+      const hls = hlsRef.current
+      if (!hls || !hls.levels.length || video.paused) return
+      const ahead = video.buffered.length ? Math.max(0, video.buffered.end(video.buffered.length - 1) - video.currentTime) : 0
+      const playbackQuality = video.getVideoPlaybackQuality?.()
+      const dropped = playbackQuality?.droppedVideoFrames ?? 0
+      const total = playbackQuality?.totalVideoFrames ?? 0
+      const droppedDelta = Math.max(0, dropped - lastDropped)
+      const totalDelta = Math.max(1, total - lastTotal)
+      lastDropped = dropped
+      lastTotal = total
+      const droppedRatio = droppedDelta / totalDelta
+      const safeCap = getSafeMaxLevel(hls.levels, profile.maxResolution, getNetworkEstimate())
+      const stressed = ahead < (streamType === 'live' ? 7 : 5) || droppedRatio > 0.08
+      if (stressed) {
+        stableSince = Date.now()
+        const current = hls.autoLevelCapping >= 0 ? hls.autoLevelCapping : Math.max(0, hls.currentLevel)
+        hls.autoLevelCapping = Math.max(0, Math.min(current, safeCap) - 1)
+        hls.nextLevel = -1
+        setQualityLabel('Adaptive · economy')
+      } else if (ahead > 18 && Date.now() - stableSince > 25_000) {
+        hls.autoLevelCapping = safeCap
+        hls.nextLevel = -1
+        setQualityLabel('Adaptive · balanced')
+      } else if (hls.autoLevelCapping < 0) {
+        hls.autoLevelCapping = safeCap
+        setQualityLabel('Adaptive')
+      }
+    }, 4_000)
+    return () => window.clearInterval(timer)
+  }, [src, fallbackSrc, streamType, state])
+
+  const saveCurrentMoment = () => {
+    const video = videoRef.current
+    if (!video || !title) return
+    const live = streamType === 'live'
+    if (live && (!video.seekable.length || video.currentTime < video.seekable.start(0) || video.currentTime > video.seekable.end(video.seekable.length - 1))) {
+      setReason('This live stream has no seekable rewind window.')
+      return
+    }
+    const mediaKey = [streamType || 'video', title.trim().toLowerCase()].join(':')
+    saveMoment({ mediaKey, title, streamType: streamType || 'movie', position: video.currentTime || 0, live })
+    setMomentSaved(true)
+    window.setTimeout(() => setMomentSaved(false), 1800)
+  }
 
   const manualRetry = () => {
     attemptRef.current = 0
@@ -388,6 +498,18 @@ export default function VideoPlayer({
     else void target.requestFullscreen?.()
   }
 
+  const showControls = () => {
+    setControlsVisible(true)
+    if (controlTimerRef.current) clearTimeout(controlTimerRef.current)
+    if (!paused && state === 'playing') {
+      controlTimerRef.current = setTimeout(() => setControlsVisible(false), CONTROL_HIDE_DELAY_MS)
+    }
+  }
+  useEffect(() => {
+    showControls()
+    return () => { if (controlTimerRef.current) clearTimeout(controlTimerRef.current) }
+  }, [paused, state])
+
   const progress = duration > 0 ? currentTime / duration * 100 : 0
   const bufferedProgress = duration > 0 ? buffered / duration * 100 : 0
 
@@ -396,6 +518,10 @@ export default function VideoPlayer({
       className={'relative isolate aspect-video w-full overflow-hidden bg-black text-white ' + className}
       style={{ '--player-accent': '#E50914' } as CSSProperties}
       aria-label={title ? 'Video player: ' + title : 'Video player'}
+      onMouseMove={showControls}
+      onTouchStart={showControls}
+      onKeyDown={showControls}
+      onClick={event => { if (event.target === videoRef.current) { togglePlay(); showControls() } }}
     >
       <video ref={videoRef} className="h-full w-full bg-black object-contain" playsInline preload="auto" controls={false} aria-label={title || 'Video'} />
 
@@ -421,7 +547,7 @@ export default function VideoPlayer({
         </div>
       )}
 
-      <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/55 to-transparent px-4 pb-3 pt-10">
+      <div className={'absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/55 to-transparent px-4 pb-3 pt-10 transition-opacity duration-300 ' + (controlsVisible || paused || state !== 'playing' ? 'opacity-100' : 'pointer-events-none opacity-0')}>
         <div className="mb-3 flex items-center gap-3">
           <span className="text-[11px] tabular-nums text-white/75">{formatTime(currentTime)}</span>
           <div className="relative h-1 flex-1 rounded-full bg-white/20">
@@ -439,7 +565,8 @@ export default function VideoPlayer({
             {muted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
           <input aria-label="Volume" type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={event => changeVolume(Number(event.target.value))} className="w-20 accent-[#E50914]" />
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-white/75">{title || ''}</span>
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-white/75">{title || ''} · {qualityLabel}</span>
+          <button type="button" onClick={saveCurrentMoment} aria-label="Save moment" title={momentSaved ? 'Moment saved' : 'Save moment'} className="rounded p-1.5 hover:bg-white/10"><BookmarkPlus size={18} className={momentSaved ? 'text-green-400' : ''} /></button>
           <button type="button" onClick={fullscreen} aria-label="Fullscreen" className="rounded p-1.5 hover:bg-white/10"><Maximize size={18} /></button>
         </div>
       </div>
