@@ -19,7 +19,7 @@ function countdown(value: string, now: number) {
   const target = Date.parse(value)
   if (!Number.isFinite(target)) return 'Time to be confirmed'
   const delta = target - now
-  if (delta <= 0) return 'Starting now'
+  if (delta <= 0) return 'Scheduled start'
   const days = Math.floor(delta / 86400000)
   const hours = Math.floor((delta % 86400000) / 3600000)
   const minutes = Math.floor((delta % 3600000) / 60000)
@@ -37,12 +37,14 @@ export default function EventsSpotlight() {
 
   useEffect(() => {
     let active = true
-    fetch(API + '/api/discovery')
+    const refresh = () => fetch(API + '/api/discovery')
       .then(response => response.ok ? response.json() as Promise<Feed> : Promise.reject(new Error('feed unavailable')))
-      .then(data => { if (active) setFeed(data) })
-      .catch(() => { if (active) setFailed(true) })
+      .then(data => { if (active) { setFeed(data); setFailed(false) } })
+      .catch(() => { if (active && !feed) setFailed(true) })
+    void refresh()
     const clock = window.setInterval(() => setNow(Date.now()), 30000)
-    return () => { active = false; window.clearInterval(clock) }
+    const feedTimer = window.setInterval(() => void refresh(), 5 * 60 * 1000)
+    return () => { active = false; window.clearInterval(clock); window.clearInterval(feedTimer) }
   }, [])
 
   const items = useMemo<SpotlightItem[]>(() => {
@@ -72,7 +74,7 @@ export default function EventsSpotlight() {
 
   const item = items[index]
   const image = item.kind === 'episode' && item.image && /^https:\/\//i.test(item.image) ? item.image : null
-  const isLive = Date.parse(item.startsAt) <= now
+  const hasReachedStart = Date.parse(item.startsAt) <= now
   return <section className="relative isolate overflow-hidden rounded-3xl border border-white/10 bg-[#11131c]" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} aria-label="Upcoming events spotlight">
     {image && <img key={image} src={image} alt="" className="absolute inset-0 -z-20 h-full w-full object-cover opacity-35 transition-opacity duration-700" loading="lazy"/>}
     <div className="absolute inset-0 -z-10 bg-gradient-to-r from-[#090a0f] via-[#090a0f]/90 to-[#090a0f]/35"/>
@@ -84,7 +86,7 @@ export default function EventsSpotlight() {
       </div>
       <div className="max-w-3xl">
         <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#e50914] px-3 py-1.5 text-white">{isLive ? <Radio size={13}/> : item.kind === 'sport' ? <Trophy size={13}/> : <Tv size={13}/>} {isLive ? 'Starting now' : item.kind === 'sport' ? (item.sport || 'Sport') : 'TV premiere'}</span>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#e50914] px-3 py-1.5 text-white">{hasReachedStart ? <Clock3 size={13}/> : item.kind === 'sport' ? <Trophy size={13}/> : <Tv size={13}/>} {hasReachedStart ? 'Scheduled start' : item.kind === 'sport' ? (item.sport || 'Sport') : 'TV premiere'}</span>
           <span className="rounded-full border border-white/15 bg-black/25 px-3 py-1.5 text-white/75">{countdown(item.startsAt, now)}</span>
         </div>
         <h2 className="mt-4 text-3xl font-black leading-tight sm:text-5xl">{item.title}</h2>
@@ -96,7 +98,7 @@ export default function EventsSpotlight() {
         </div>
       </div>
       <div className="flex items-center justify-between gap-3">
-        <div className="flex max-w-[70%] gap-1.5 overflow-hidden">{items.slice(0, 12).map((entry, dot) => <button key={entry.id} onClick={() => setIndex(dot)} aria-label={'Show event ' + (dot + 1)} className={'h-1.5 rounded-full transition-all ' + (dot === index ? 'w-8 bg-[#e50914]' : 'w-3 bg-white/30 hover:bg-white/60')}/>)}</div>
+        <div className="flex max-w-[70%] gap-1.5 overflow-hidden">{items.slice(0, 12).map((entry, dot) => <button key={entry.id} onClick={() => setIndex(dot)} aria-label={'Show event ' + (dot + 1)} className={'h-1.5 rounded-full transition-all ' + (dot === index % 12 ? 'w-8 bg-[#e50914]' : 'w-3 bg-white/30 hover:bg-white/60')}/>)}</div>
         <div className="flex gap-2"><button onClick={() => setIndex(current => (current - 1 + items.length) % items.length)} aria-label="Previous event" className="grid h-10 w-10 place-items-center rounded-full border border-white/15 bg-black/30 hover:bg-white/10"><ArrowLeft size={17}/></button><button onClick={() => setIndex(current => (current + 1) % items.length)} aria-label="Next event" className="grid h-10 w-10 place-items-center rounded-full border border-white/15 bg-black/30 hover:bg-white/10"><ArrowRight size={17}/></button></div>
       </div>
     </div>
