@@ -318,15 +318,20 @@ async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.R
   const category = String(req.query.category || '').trim().slice(0, 160)
   const search = String(req.query.search || '').trim().slice(0, 100)
   const targetStart = (page - 1) * limit
-  const chunkSize = 500
+  const chunkSize = 100
   let sourceOffset = 0
   let acceptedBefore = 0
   let items: any[] = []
   let sourceTotal = 0
   let exhausted = false
   while (!exhausted && items.length < limit && sourceOffset < 10000000) {
-    const result = await supabaseRpc('jok_catalog_page_filtered', {
-      p_kind: kind, p_query: search, p_category: category, p_limit: chunkSize, p_offset: sourceOffset
+    const result = await supabaseRpc('jok_catalog_page_sorted', {
+      p_kind: kind, p_query: search, p_category: category,
+      p_sort: String(req.query.sort || 'name_asc').slice(0, 32),
+      p_genre: String(req.query.genre || '').slice(0, 80) || null,
+      p_year: /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : null,
+      p_min_rating: Number.isFinite(Number(req.query.minRating)) && req.query.minRating !== undefined && req.query.minRating !== '' ? Math.max(0, Math.min(10, Number(req.query.minRating))) : null,
+      p_limit: chunkSize, p_offset: sourceOffset
     })
     const rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
     sourceTotal = Number(result?.total ?? result?.count ?? sourceTotal)
@@ -386,6 +391,55 @@ for (const [path, kind] of [['/api/live', 'live'], ['/api/movies', 'movie'], ['/
     } catch { res.status(502).json({ error: 'catalog_storage_unavailable' }) }
   })
 }
+
+app.get('/api/home-discovery', async (_req, res) => {
+  const cacheKey = 'home-discovery'
+  const cached = artworkCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=900')
+    return res.json(cached.value)
+  }
+  if (!env.TMDB_API_KEY) return res.status(503).json({ error: 'tmdb_api_key_not_configured' })
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10)
+    const discover = async (kind: 'movie' | 'tv', sort: string, extra: Record<string, string> = {}) => {
+      const url = new URL('https://api.themoviedb.org/3/discover/' + kind)
+      url.searchParams.set('api_key', env.TMDB_API_KEY!)
+      url.searchParams.set('language', 'en-US')
+      url.searchParams.set('include_adult', 'false')
+      url.searchParams.set('include_video', 'false')
+      url.searchParams.set('sort_by', sort)
+      url.searchParams.set('page', '1')
+      for (const [key, value] of Object.entries(extra)) url.searchParams.set(key, value)
+      const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(12000) })
+      if (!response.ok) throw new Error('tmdb_discovery_unavailable')
+      const body = await response.json() as { results?: any[] }
+      return (body.results || []).filter(row => row.poster_path).map(row => ({
+        id: Number(row.id),
+        title: String(row.title || row.name || row.original_title || row.original_name || 'Untitled'),
+        overview: String(row.overview || ''),
+        releaseDate: String(row.release_date || row.first_air_date || ''),
+        year: String(row.release_date || row.first_air_date || '').slice(0, 4),
+        rating: typeof row.vote_average === 'number' ? row.vote_average : null,
+        poster: row.poster_path ? 'https://image.tmdb.org/t/p/w500' + row.poster_path : null,
+        backdrop: row.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + row.backdrop_path : null
+      }))
+    }
+    const [latestMovies, latestSeries, topMovies, topSeries] = await Promise.all([
+      discover('movie', 'release_date.desc', { 'release_date.lte': today, 'release_date.gte': yearAgo, 'vote_count.gte': '10' }),
+      discover('tv', 'first_air_date.desc', { 'first_air_date.lte': today, 'first_air_date.gte': yearAgo, 'vote_count.gte': '5' }),
+      discover('movie', 'vote_average.desc', { 'vote_count.gte': '200' }),
+      discover('tv', 'vote_average.desc', { 'vote_count.gte': '100' })
+    ])
+    const payload = { updatedAt: new Date().toISOString(), latestMovies: latestMovies.slice(0, 14), latestSeries: latestSeries.slice(0, 14), topMovies: topMovies.slice(0, 14), topSeries: topSeries.slice(0, 14), attribution: 'TMDB' }
+    artworkCache.set(cacheKey, { expiresAt: Date.now() + 30 * 60_000, value: payload })
+    res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=900')
+    res.json(payload)
+  } catch {
+    res.status(502).json({ error: 'home_discovery_unavailable' })
+  }
+})
 
 app.get('/api/hero-events', async (_req, res) => {
   const key = 'hero-events'

@@ -35,6 +35,13 @@ export default function EventsSpotlight() {
     let active = true
     const refresh = () => fetch(API + '/api/hero-events')
       .then(response => response.ok ? response.json() as Promise<Feed> : Promise.reject(new Error('feed unavailable')))
+      .then(async data => {
+        if (data.events?.length || data.trendingMovies?.length) return data
+        const discoveryResponse = await fetch(API + '/api/home-discovery')
+        if (!discoveryResponse.ok) return data
+        const discovery = await discoveryResponse.json() as { latestMovies?: Array<{id:number;title:string;overview?:string;year?:string;rating?:number;poster?:string|null;backdrop?:string|null}> }
+        return { ...data, trendingMovies: (discovery.latestMovies || []).slice(0, 10).map(movie => ({ id: String(movie.id), title: movie.title, overview: movie.overview, releaseYear: movie.year, rating: movie.rating, poster: movie.poster, backdrop: movie.backdrop, source: 'TMDB' })) }
+      })
       .then(data => { if (active) { setFeed(data); setFailed(false) } })
       .catch(() => { if (active) setFailed(true) })
     void refresh()
