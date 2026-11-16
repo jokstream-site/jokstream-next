@@ -324,16 +324,30 @@ async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.R
   let items: any[] = []
   let sourceTotal = 0
   let exhausted = false
+  const requestedSort = String(req.query.sort || 'name_asc').slice(0, 32)
+  let effectiveSort = requestedSort
+  const canUseProviderFallback = (kind === 'movie' || kind === 'series') &&
+    ['release_newest', 'release_oldest', 'rating_highest'].includes(requestedSort) &&
+    !req.query.genre && !req.query.year && (req.query.minRating === undefined || req.query.minRating === '')
   while (!exhausted && items.length < limit && sourceOffset < 10000000) {
-    const result = await supabaseRpc('jok_catalog_page_sorted', {
+    let result = await supabaseRpc('jok_catalog_page_sorted', {
       p_kind: kind, p_query: search, p_category: category,
-      p_sort: String(req.query.sort || 'name_asc').slice(0, 32),
+      p_sort: effectiveSort,
       p_genre: String(req.query.genre || '').slice(0, 80) || null,
       p_year: /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : null,
       p_min_rating: Number.isFinite(Number(req.query.minRating)) && req.query.minRating !== undefined && req.query.minRating !== '' ? Math.max(0, Math.min(10, Number(req.query.minRating))) : null,
       p_limit: chunkSize, p_offset: sourceOffset
     })
-    const rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
+    let rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
+    if (!rows.length && sourceOffset === 0 && canUseProviderFallback) {
+      effectiveSort = 'name_asc'
+      result = await supabaseRpc('jok_catalog_page_sorted', {
+        p_kind: kind, p_query: search, p_category: category,
+        p_sort: 'name_asc', p_genre: null, p_year: null, p_min_rating: null,
+        p_limit: chunkSize, p_offset: sourceOffset
+      })
+      rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
+    }
     sourceTotal = Number(result?.total ?? result?.count ?? sourceTotal)
     if (!rows.length) { exhausted = true; break }
     for (const row of rows) {
@@ -465,14 +479,24 @@ app.get('/api/home-catalog', async (_req, res) => {
   try {
     void refreshHomeMetadata()
     const load = async (kind: 'movie' | 'series', sort: 'release_newest' | 'rating_highest') => {
-      const result = await supabaseRpc('jok_catalog_page_sorted', {
+      let result = await supabaseRpc('jok_catalog_page_sorted', {
         p_kind: kind, p_query: '', p_category: '', p_sort: sort,
         p_genre: null, p_year: null, p_min_rating: sort === 'rating_highest' ? 6 : null,
         p_limit: 14, p_offset: 0
       })
-      const rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
-      return rows.filter(cleanCatalogRow).map((row: any) => ({
-        id: String(row.item_id), item_id: String(row.item_id), title: String(row.name),
+      let rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
+      if (!rows.length) {
+        result = await supabaseRpc('jok_catalog_page_sorted', {
+          p_kind: kind, p_query: '', p_category: '', p_sort: 'name_asc',
+          p_genre: null, p_year: null, p_min_rating: null,
+          p_limit: 14, p_offset: 0
+        })
+        rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
+      }
+      return rows.filter(cleanCatalogRow).map((row: any) => {
+        const itemId = String(row.item_id ?? row.id)
+        return {
+        id: itemId, item_id: itemId, title: String(row.name),
         overview: String(row.overview || ''), releaseDate: String(row.release_date || ''),
         year: String(row.release_date || '').slice(0, 4),
         rating: typeof row.vote_average === 'number' ? row.vote_average : null,
@@ -480,13 +504,14 @@ app.get('/api/home-catalog', async (_req, res) => {
         poster: row.image_url || (row.poster_path ? 'https://image.tmdb.org/t/p/w500' + row.poster_path : null),
         backdrop: row.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + row.backdrop_path : null,
         kind, category: row.category || '', streamAvailable: true
-      }))
+      }
+      })
     }
     const [latestMovies, latestSeries, topMovies, topSeries] = await Promise.all([
       load('movie', 'release_newest'), load('series', 'release_newest'),
       load('movie', 'rating_highest'), load('series', 'rating_highest')
     ])
-    const payload = { updatedAt: new Date().toISOString(), latestMovies, latestSeries, topMovies, topSeries, source: 'provider_catalog_tmdb_ranked' }
+    const payload = { updatedAt: new Date().toISOString(), latestMovies, latestSeries, topMovies, topSeries, source: 'provider_catalog_with_metadata_fallback' }
     artworkCache.set(cacheKey, { expiresAt: Date.now() + 2 * 60_000, value: payload })
     res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=600')
     res.json(payload)
@@ -871,11 +896,25 @@ app.all('/api/stream/:token', async (req, res) => {
       signal: controller.signal
     })
     res.status(upstream.status)
-    if (!upstream.ok) console.warn('[stream-upstream-status]', {
-      status: upstream.status,
-      url: safeUrlForLog(upstream.url || target.toString()),
-      hasRange: Boolean(range)
-    })
+    if (!upstream.ok) {
+      let upstreamError = 'upstream_error'
+      if (upstream.status >= 500) {
+        try {
+          const body = await upstream.clone().text()
+          const parsed = JSON.parse(body) as { error?: unknown; code?: unknown; message?: unknown }
+          const candidate = parsed.error ?? parsed.code ?? parsed.message
+          if (typeof candidate === 'string' && /^[a-z0-9_.-]{1,100}$/i.test(candidate)) upstreamError = candidate
+          else if (!body.trim()) upstreamError = 'empty_upstream_body'
+          else upstreamError = 'upstream_json_error'
+        } catch { upstreamError = 'upstream_non_json_error' }
+      }
+      console.warn('[stream-upstream-status]', {
+        status: upstream.status,
+        error: upstreamError,
+        url: safeUrlForLog(upstream.url || target.toString()),
+        hasRange: Boolean(range)
+      })
+    }
 
     for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag', 'content-disposition']) {
       const value = upstream.headers.get(header)
