@@ -491,8 +491,10 @@ app.get('/api/home-catalog', async (_req, res) => {
         })
         rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
       }
-      return rows.filter(cleanCatalogRow).map((row: any) => ({
-        id: String(row.item_id), item_id: String(row.item_id), title: String(row.name),
+      return rows.filter(cleanCatalogRow).map((row: any) => {
+        const itemId = String(row.item_id ?? row.id)
+        return {
+        id: itemId, item_id: itemId, title: String(row.name),
         overview: String(row.overview || ''), releaseDate: String(row.release_date || ''),
         year: String(row.release_date || '').slice(0, 4),
         rating: typeof row.vote_average === 'number' ? row.vote_average : null,
@@ -500,7 +502,8 @@ app.get('/api/home-catalog', async (_req, res) => {
         poster: row.image_url || (row.poster_path ? 'https://image.tmdb.org/t/p/w500' + row.poster_path : null),
         backdrop: row.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + row.backdrop_path : null,
         kind, category: row.category || '', streamAvailable: true
-      }))
+      }
+      })
     }
     const [latestMovies, latestSeries, topMovies, topSeries] = await Promise.all([
       load('movie', 'release_newest'), load('series', 'release_newest'),
