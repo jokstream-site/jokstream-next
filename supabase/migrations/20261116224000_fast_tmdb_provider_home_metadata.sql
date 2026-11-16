@@ -157,6 +157,8 @@ begin
     and (coalesce(p_genre,'')='' or p_genre=any(m.genres))
     and (p_year is null or extract(year from m.release_date)=p_year)
     and (p_min_rating is null or m.vote_average>=p_min_rating)
+    and (sort_key <> 'release_newest' or m.release_date is not null)
+    and (sort_key <> 'release_oldest' or m.release_date is not null)
     and (sort_key <> 'rating_highest' or (m.vote_average is not null and m.vote_count >= 250));
 
   select coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) into rows
@@ -175,6 +177,8 @@ begin
       and (coalesce(p_genre,'')='' or p_genre=any(m.genres))
       and (p_year is null or extract(year from m.release_date)=p_year)
       and (p_min_rating is null or m.vote_average>=p_min_rating)
+      and (sort_key <> 'release_newest' or m.release_date is not null)
+      and (sort_key <> 'release_oldest' or m.release_date is not null)
       and (sort_key <> 'rating_highest' or (m.vote_average is not null and m.vote_count >= 250))
     order by
       case when sort_key='release_newest' then m.release_date end desc nulls last,
