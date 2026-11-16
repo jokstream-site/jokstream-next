@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Tv, Film, Clapperboard, ArrowRight, LoaderCircle, Star, CalendarDays } from 'lucide-react'
+import { Play, Tv, Film, Clapperboard, ArrowRight, LoaderCircle, Star } from 'lucide-react'
 import WatchChannelModal from '../components/WatchChannelModal'
 import EventsSpotlight from '../components/EventsSpotlight'
 import AdSlot from '../components/AdSlot'
