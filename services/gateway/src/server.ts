@@ -502,7 +502,7 @@ function decodeEpgText(value: unknown) {
   if (/^[A-Za-z0-9+/]+={0,2}$/.test(raw) && raw.length >= 8) {
     try {
       const decoded = Buffer.from(raw, 'base64').toString('utf8').trim()
-      if (decoded && /[A-Za-z0-9]/.test(decoded)) return decoded
+      if (decoded && !/[\u0000-\u001F\uFFFD]/.test(decoded)) return decoded
     } catch { /* provider may return plain text */ }
   }
   return raw
