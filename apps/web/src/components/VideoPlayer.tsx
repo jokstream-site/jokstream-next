@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import Hls from 'hls.js'
+import AdSlot from './AdSlot'
 import mpegts from 'mpegts.js'
 import { AlertCircle, Maximize, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
 
@@ -397,6 +398,7 @@ export default function VideoPlayer({
       style={{ '--player-accent': '#E50914' } as CSSProperties}
       aria-label={title ? 'Video player: ' + title : 'Video player'}
     >
+      <AdSlot placement="player-preroll" className="absolute left-0 top-0 z-30" />
       <video ref={videoRef} className="h-full w-full bg-black object-contain" playsInline preload="auto" controls={false} aria-label={title || 'Video'} />
 
       {state !== 'playing' && (
