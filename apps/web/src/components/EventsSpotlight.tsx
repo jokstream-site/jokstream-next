@@ -41,7 +41,7 @@ export default function EventsSpotlight() {
       .catch(() => { if (active) setFailed(true) })
     void refresh()
     const clock = window.setInterval(() => setNow(Date.now()), 30000)
-    const feedTimer = window.setInterval(() => void refresh(), 30 * 1000)
+    const feedTimer = window.setInterval(() => void refresh(), 15 * 1000)
     return () => { active = false; window.clearInterval(clock); window.clearInterval(feedTimer) }
   }, [])
 
