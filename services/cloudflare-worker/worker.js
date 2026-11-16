@@ -30,7 +30,7 @@ function providerStreamUrl(cfg, pathname) {
   return new URL("/" + parts[1] + "/" + encodeURIComponent(cfg.username) + "/" +
     encodeURIComponent(cfg.password) + "/" + parts[2], cfg.origin);
 }
-const STREAM_CDN_HOSTS = new Set(["burn.arshas.com", "bpair.arshas.com"]);
+const STREAM_CDN_HOSTS = new Set(["burn.arshas.com", "bpair.arshas.com", "bundle.arshas.com"]);
 function isAllowedProviderTarget(target, cfg) {
   if (target.username || target.password || !["http:", "https:"].includes(target.protocol)) return false;
   if (target.origin === cfg.origin) return true;
