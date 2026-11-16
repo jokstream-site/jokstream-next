@@ -259,7 +259,7 @@ async function probePlaylistStream(cfg, id) {
   let entries = 0;
   let idMentions = 0;
   const pathShapes = [];
-  for (const line of body.replace(/^\\uFEFF/, "").split(/\\r?\\n/)) {
+  for (const line of body.replace(/^\uFEFF/, "").split(/\r?\n/)) {
     const value = line.trim();
     if (!value || value.startsWith("#")) continue;
     entries++;
@@ -269,7 +269,7 @@ async function probePlaylistStream(cfg, id) {
       const segments = candidate.pathname.split("/").filter(Boolean).map(part => {
         try { return decodeURIComponent(part); } catch { return part; }
       });
-      const segmentMatch = segments.find(part => new RegExp("^" + id + "(?:\\\\.(?:ts|m3u8|mp4))?$", "i").test(part));
+      const segmentMatch = segments.find(part => new RegExp("^" + id + "(?:\\.(?:ts|m3u8|mp4))?$", "i").test(part));
       const queryMatch = [...candidate.searchParams.entries()].some(([key, val]) =>
         /^(?:stream_?id|id)$/i.test(key) && val === id);
       if (segmentMatch || queryMatch) {
