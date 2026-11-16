@@ -464,7 +464,7 @@ app.get('/api/home-catalog', async (_req, res) => {
   }
   try {
     const refresh = refreshHomeMetadata()
-    if (!cached && !homeMetadataRefreshAt) await Promise.race([refresh, new Promise(resolve => setTimeout(resolve, 5500))])
+    if (!cached && refresh) await Promise.race([refresh, new Promise(resolve => setTimeout(resolve, 5500))])
     const load = async (kind: 'movie' | 'series', sort: 'release_newest' | 'rating_highest') => {
       const result = await supabaseRpc('jok_catalog_page_sorted', {
         p_kind: kind, p_query: '', p_category: '', p_sort: sort,
