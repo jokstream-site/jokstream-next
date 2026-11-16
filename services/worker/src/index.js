@@ -491,7 +491,7 @@ export default {
       if (url.pathname.startsWith("/stream/")) {
         if (!authorized(request, env, url, true)) return json({ error: "Unauthorized" }, 401);
         const requested = providerStreamUrl(cfg, url.pathname, url.search);
-        const match = url.pathname.match(/^\/stream\/(?:live|movie|series)\/(\d+)\.(?:ts|m3u8|mp4|mkv|avi)$/i);
+        const match = url.pathname.match(/^\\/stream\\/live\\/(\\d+)\\.(?:ts|m3u8)$/i);
         const target = match ? await resolvePlaylistStreamTarget(cfg, match[1]) : requested;
         return proxyProvider(request, cfg, target, env);
       }
