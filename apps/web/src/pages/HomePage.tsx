@@ -27,11 +27,29 @@ export default function HomePage() {
 
   useEffect(() => {
     let active = true
+    let retryTimer: number | undefined
+    let retries = 0
     fetch(API + '/api/live?page=1&limit=1').then(response => response.ok ? response.json() : Promise.reject())
       .then(data => { if (active && data.items?.[0]) setHeroChannel(data.items[0] as Channel) }).catch(() => { if (active) setHeroChannel(null) })
-    fetch(API + '/api/home-catalog').then(response => response.ok ? response.json() : Promise.reject())
-      .then(data => { if (active) setDiscovery(data as Discovery) }).catch(() => { if (active) setDiscovery(null) })
-    return () => { active = false }
+    const loadDiscovery = () => {
+      fetch(API + '/api/home-catalog').then(response => response.ok ? response.json() : Promise.reject())
+        .then(data => {
+          if (!active) return
+          setDiscovery(data as Discovery)
+          const count = ['latestMovies','latestSeries','topMovies','topSeries'].reduce((total, key) => total + (Array.isArray(data[key]) ? data[key].length : 0), 0)
+          if (count === 0 && retries < 4) {
+            retries += 1
+            retryTimer = window.setTimeout(loadDiscovery, 15000)
+          }
+        }).catch(() => {
+          if (active && retries < 4) {
+            retries += 1
+            retryTimer = window.setTimeout(loadDiscovery, 15000)
+          }
+        })
+    }
+    void loadDiscovery()
+    return () => { active = false; if (retryTimer) window.clearTimeout(retryTimer) }
   }, [])
 
   async function openHeroChannel() {
