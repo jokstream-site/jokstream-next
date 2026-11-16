@@ -325,13 +325,14 @@ async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.R
   let sourceTotal = 0
   let exhausted = false
   const requestedSort = String(req.query.sort || 'name_asc').slice(0, 32)
+  let effectiveSort = requestedSort
   const canUseProviderFallback = (kind === 'movie' || kind === 'series') &&
     ['release_newest', 'release_oldest', 'rating_highest'].includes(requestedSort) &&
     !req.query.genre && !req.query.year && (req.query.minRating === undefined || req.query.minRating === '')
   while (!exhausted && items.length < limit && sourceOffset < 10000000) {
     let result = await supabaseRpc('jok_catalog_page_sorted', {
       p_kind: kind, p_query: search, p_category: category,
-      p_sort: requestedSort,
+      p_sort: effectiveSort,
       p_genre: String(req.query.genre || '').slice(0, 80) || null,
       p_year: /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : null,
       p_min_rating: Number.isFinite(Number(req.query.minRating)) && req.query.minRating !== undefined && req.query.minRating !== '' ? Math.max(0, Math.min(10, Number(req.query.minRating))) : null,
@@ -339,6 +340,7 @@ async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.R
     })
     let rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
     if (!rows.length && sourceOffset === 0 && canUseProviderFallback) {
+      effectiveSort = 'name_asc'
       result = await supabaseRpc('jok_catalog_page_sorted', {
         p_kind: kind, p_query: search, p_category: category,
         p_sort: 'name_asc', p_genre: null, p_year: null, p_min_rating: null,
