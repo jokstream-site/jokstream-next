@@ -37,9 +37,9 @@ export default function HomePage() {
           if (!active) return
           setDiscovery(data as Discovery)
           const count = ['latestMovies','latestSeries','topMovies','topSeries'].reduce((total, key) => total + (Array.isArray(data[key]) ? data[key].length : 0), 0)
-          if (count === 0 && retries < 4) {
+          if (count === 0 && retries < 6) {
             retries += 1
-            retryTimer = window.setTimeout(loadDiscovery, 15000)
+            retryTimer = window.setTimeout(loadDiscovery, 5000)
           }
         }).catch(() => {
           if (active && retries < 4) {
