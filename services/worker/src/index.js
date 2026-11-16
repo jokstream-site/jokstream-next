@@ -146,7 +146,7 @@ async function rewriteHlsManifest(body, target, requestUrl, cfg, secret, targetP
   }
   return output.join("\n");
 }
-async function resolvePlaylistStreamTarget(cfg, id) {
+async function resolvePlaylistStreamTarget(cfg, id, kind = 'live') {
   const playlist = await fetch(cfg.playlistUrl, {
     headers: { "User-Agent": "okhttp/5.0.0-alpha.2", Accept: "*/*" },
     redirect: "follow", signal: AbortSignal.timeout(30000)
@@ -161,7 +161,7 @@ async function resolvePlaylistStreamTarget(cfg, id) {
       const segments = candidate.pathname.split("/").filter(Boolean).map(part => {
         try { return decodeURIComponent(part); } catch { return part; }
       });
-      const segmentMatch = segments.some(part => new RegExp("^" + id + "(?:\\.(?:ts|m3u8|mp4|mkv|avi))?$", "i").test(part));
+      const categoryMatch = segments.some(part => part.toLowerCase() === kind);\n      if (!categoryMatch) continue;\n      const segmentMatch = segments.some(part => new RegExp("^" + id + "(?:\\.(?:ts|m3u8|mp4|mkv|avi))?$", "i").test(part));
       const queryMatch = [...candidate.searchParams.entries()].some(([key, val]) =>
         /^(?:stream_?id|id)$/i.test(key) && val === id);
       if (segmentMatch || queryMatch) {
@@ -491,8 +491,15 @@ export default {
       if (url.pathname.startsWith("/stream/")) {
         if (!authorized(request, env, url, true)) return json({ error: "Unauthorized" }, 401);
         const requested = providerStreamUrl(cfg, url.pathname, url.search);
-        const match = url.pathname.match(/^\/stream\/live\/(\d+)\.(?:ts|m3u8)$/i);
-        const target = match ? await resolvePlaylistStreamTarget(cfg, match[1]) : requested;
+        const match = url.pathname.match(/^\/stream\/(live|movie|series)\/(\d+)\.([a-z0-9]{2,6})$/i);
+        let target = requested;
+        if (match) {
+          try {
+            target = await resolvePlaylistStreamTarget(cfg, match[2], match[1].toLowerCase());
+          } catch (error) {
+            if (!(error instanceof Error) || !error.message.startsWith("provider_stream_not_found_in_playlist")) throw error;
+          }
+        }
         return proxyProvider(request, cfg, target, env);
       }
       if (url.pathname.startsWith("/hls/")) {
