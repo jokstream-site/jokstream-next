@@ -23,12 +23,25 @@ function authorized(request, env, url, allowQuery = false) {
   return header === "Bearer " + env.JOKSTREAM_PROXY_TOKEN ||
     (allowQuery && url.searchParams.get("token") === env.JOKSTREAM_PROXY_TOKEN);
 }
-function providerStreamUrl(cfg, pathname) {
-  const parts = pathname.split("/").filter(Boolean);
-  if (parts.length !== 3 || parts[0] !== "stream" || !["live", "movie", "series"].includes(parts[1])) throw new Error("Invalid stream path");
-  if (!/^\d{1,20}\.[a-z0-9]{2,6}$/i.test(parts[2])) throw new Error("Invalid stream identifier");
-  return new URL("/" + parts[1] + "/" + encodeURIComponent(cfg.username) + "/" +
-    encodeURIComponent(cfg.password) + "/" + parts[2], cfg.origin);
+function providerStreamUrl(cfg, pathname, search = "") {
+  const raw = pathname.slice("/stream/".length);
+  if (!raw || raw.length > 4096 || raw.includes("\\\\") || /[\\u0000-\\u001f]/.test(raw)) {
+    throw new Error("Invalid stream path");
+  }
+  const parts = raw.split("/").filter(Boolean);
+  if (parts.some(part => part === "." || part === "..")) throw new Error("Invalid stream path");
+  const category = ["live", "movie", "series"].includes(parts[0]) ? parts.shift() : null;
+  const upstreamPath = category
+    ? "/" + category + "/" + encodeURIComponent(cfg.username) + "/" +
+      encodeURIComponent(cfg.password) + "/" + parts.map(part => encodeURIComponent(decodeURIComponent(part))).join("/")
+    : "/" + raw.split("/").map(part => encodeURIComponent(decodeURIComponent(part))).join("/");
+  const target = new URL(upstreamPath, cfg.origin);
+  const incoming = new URLSearchParams(search);
+  for (const [key, value] of incoming) {
+    if (key.toLowerCase() === "username" || key.toLowerCase() === "password") continue;
+    target.searchParams.append(key, value);
+  }
+  return target;
 }
 // Playback destinations come from the authenticated provider's redirects and HLS manifests.
 // CDN hostnames and HTTP/HTTPS may vary between channels; do not maintain a per-CDN allowlist.
@@ -449,7 +462,7 @@ export default {
       }
       if (url.pathname.startsWith("/stream/")) {
         if (!authorized(request, env, url, true)) return json({ error: "Unauthorized" }, 401);
-        return proxyProvider(request, cfg, providerStreamUrl(cfg, url.pathname), env);
+        return proxyProvider(request, cfg, providerStreamUrl(cfg, url.pathname, url.search), env);
       }
       if (url.pathname.startsWith("/hls/")) {
         const token = url.pathname.slice("/hls/".length);
