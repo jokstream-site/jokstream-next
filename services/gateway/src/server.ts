@@ -318,15 +318,20 @@ async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.R
   const category = String(req.query.category || '').trim().slice(0, 160)
   const search = String(req.query.search || '').trim().slice(0, 100)
   const targetStart = (page - 1) * limit
-  const chunkSize = 500
+  const chunkSize = 100
   let sourceOffset = 0
   let acceptedBefore = 0
   let items: any[] = []
   let sourceTotal = 0
   let exhausted = false
   while (!exhausted && items.length < limit && sourceOffset < 10000000) {
-    const result = await supabaseRpc('jok_catalog_page_filtered', {
-      p_kind: kind, p_query: search, p_category: category, p_limit: chunkSize, p_offset: sourceOffset
+    const result = await supabaseRpc('jok_catalog_page_sorted', {
+      p_kind: kind, p_query: search, p_category: category,
+      p_sort: String(req.query.sort || 'name_asc').slice(0, 32),
+      p_genre: String(req.query.genre || '').slice(0, 80) || null,
+      p_year: /^\\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : null,
+      p_min_rating: Number.isFinite(Number(req.query.minRating)) && req.query.minRating !== undefined && req.query.minRating !== '' ? Math.max(0, Math.min(10, Number(req.query.minRating))) : null,
+      p_limit: chunkSize, p_offset: sourceOffset
     })
     const rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
     sourceTotal = Number(result?.total ?? result?.count ?? sourceTotal)
