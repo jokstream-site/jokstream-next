@@ -1,7 +1,3 @@
---7280e6428ec9cab981625697b7742c9993cda4b7e22631e5d6d816343a5f
-Content-Disposition: form-data; name="worker.js"; filename="worker.js"
-Content-Type: application/javascript+module
-
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
@@ -495,7 +491,7 @@ export default {
       if (url.pathname.startsWith("/stream/")) {
         if (!authorized(request, env, url, true)) return json({ error: "Unauthorized" }, 401);
         const requested = providerStreamUrl(cfg, url.pathname, url.search);
-        const match = url.pathname.match(/^\\/stream\\/(?:live|movie|series)\\/(\\d+)\\.(?:ts|m3u8|mp4|mkv|avi)$/i);
+        const match = url.pathname.match(/^\/stream\/(?:live|movie|series)\/(\d+)\.(?:ts|m3u8|mp4|mkv|avi)$/i);
         const target = match ? await resolvePlaylistStreamTarget(cfg, match[1]) : requested;
         return proxyProvider(request, cfg, target, env);
       }
