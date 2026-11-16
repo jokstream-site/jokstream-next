@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Play, Tv, Film, Clapperboard, ArrowRight, LoaderCircle } from 'lucide-react'
 import WatchChannelModal from '../components/WatchChannelModal'
 import EventsSpotlight from '../components/EventsSpotlight'
+import AdSlot from '../components/AdSlot'
 
 const API = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || ''
 type Channel = { id: string; item_id?: string; name: string }
@@ -68,6 +69,7 @@ export default function HomePage() {
       </div>
     </section>
     <EventsSpotlight/>
+    <AdSlot placement="section-banner" className="my-2 min-h-0" />
     <section>
       <h2 className="mb-4 text-xl font-bold">Explore JokStream</h2>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
