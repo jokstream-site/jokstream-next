@@ -161,7 +161,9 @@ async function resolvePlaylistStreamTarget(cfg, id, kind = 'live') {
       const segments = candidate.pathname.split("/").filter(Boolean).map(part => {
         try { return decodeURIComponent(part); } catch { return part; }
       });
-      const categoryMatch = segments.some(part => part.toLowerCase() === kind);\n      if (!categoryMatch) continue;\n      const segmentMatch = segments.some(part => new RegExp("^" + id + "(?:\\.(?:ts|m3u8|mp4|mkv|avi))?$", "i").test(part));
+      const categoryMatch = segments.some(part => part.toLowerCase() === kind);
+      if (!categoryMatch) continue;
+const segmentMatch = segments.some(part => new RegExp("^" + id + "(?:\\.(?:ts|m3u8|mp4|mkv|avi))?$", "i").test(part));
       const queryMatch = [...candidate.searchParams.entries()].some(([key, val]) =>
         /^(?:stream_?id|id)$/i.test(key) && val === id);
       if (segmentMatch || queryMatch) {
