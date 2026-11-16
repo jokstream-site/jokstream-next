@@ -1,4 +1,4 @@
-import express from 'express'
+ort express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
@@ -493,19 +493,28 @@ app.get('/api/home-catalog', async (_req, res) => {
         })
         rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
       }
-      return rows.filter(cleanCatalogRow).map((row: any) => {
+      const enriched = await Promise.all(rows.filter(cleanCatalogRow).map(async (row: any) => {
         const itemId = String(row.item_id ?? row.id)
+        const title = String(row.name || '').trim()
+        const existingDate = String(row.release_date || '')
+        const titleYear = title.match(/\\b((?:19|20)\\d{2})\\b/)?.[1] || ''
+        const needsArtwork = !row.image_url && !row.poster_path
+        const needsMetadata = !existingDate || typeof row.vote_average !== 'number' || needsArtwork
+        const artwork = needsMetadata ? await lookupArtwork(kind, title) : null
+        const releaseDate = existingDate || (artwork?.releaseYear ? artwork.releaseYear + '-01-01' : titleYear ? titleYear + '-01-01' : '')
         return {
-        id: itemId, item_id: itemId, title: String(row.name),
-        overview: String(row.overview || ''), releaseDate: String(row.release_date || ''),
-        year: String(row.release_date || '').slice(0, 4),
-        rating: typeof row.vote_average === 'number' ? row.vote_average : null,
-        voteCount: Number(row.vote_count || 0),
-        poster: row.image_url || (row.poster_path ? 'https://image.tmdb.org/t/p/w500' + row.poster_path : null),
-        backdrop: row.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + row.backdrop_path : null,
-        kind, category: row.category || '', streamAvailable: true
-      }
-      })
+          id: itemId, item_id: itemId, title,
+          overview: String(row.overview || artwork?.overview || ''),
+          releaseDate,
+          year: releaseDate.slice(0, 4) || titleYear,
+          rating: typeof row.vote_average === 'number' ? row.vote_average : (typeof artwork?.rating === 'number' ? artwork.rating : null),
+          voteCount: Number(row.vote_count || 0),
+          poster: row.image_url || (row.poster_path ? 'https://image.tmdb.org/t/p/w500' + row.poster_path : artwork?.poster || null),
+          backdrop: row.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + row.backdrop_path : artwork?.backdrop || null,
+          kind, category: row.category || '', streamAvailable: true
+        }
+      }))
+      return enriched
     }
     const [latestMovies, latestSeries, topMovies, topSeries] = await Promise.all([
       load('movie', 'release_newest'), load('series', 'release_newest'),
