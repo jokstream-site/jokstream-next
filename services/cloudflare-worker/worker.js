@@ -392,7 +392,7 @@ export default {
       }
       if (url.pathname === "/test-playlist-stream") {
         const id = url.searchParams.get("id") || "1981089";
-        if (!/^\\d{1,20}$/.test(id)) return json({ error: "Invalid stream id" }, 400);
+        if (!/^\d{1,20}$/.test(id)) return json({ error: "Invalid stream id" }, 400);
         return json({ test: "playlist_stream", id, result: await probePlaylistStream(cfg, id) });
       }
       if (url.pathname === "/test-stream") {
