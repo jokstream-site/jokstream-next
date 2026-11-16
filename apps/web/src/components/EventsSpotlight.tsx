@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, CalendarDays, Flame, Film, Trophy } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CalendarDays, Flame, Film, Trophy, Tv } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 const API = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || ''
-type Fixture = { id: string; title: string; competition?: string; start_time: string; image?: string | null; source?: string }
+type Fixture = { id: string; title: string; competition?: string; start_time: string; image?: string | null; source?: string; linked_channel_name?: string | null }
+type ChannelProgram = { id: string; channelId: string; channelName: string; category?: string; title: string; description?: string; startsAt: string; source?: string }
 type TrendingMovie = { id: string; title: string; overview?: string; releaseYear?: string; rating?: number | null; poster?: string | null; backdrop?: string | null; source?: string }
-type Feed = { updatedAt: string; events: Fixture[]; trendingMovies: TrendingMovie[]; note?: string }
-type Item = { id: string; kind: 'fixture' | 'movie'; title: string; subtitle: string; date?: string; image?: string | null; source?: string; rating?: number | null }
+type Feed = { updatedAt: string; events: Fixture[]; channelPrograms?: ChannelProgram[]; trendingMovies: TrendingMovie[]; note?: string }
+type Item = { id: string; kind: 'fixture' | 'movie' | 'program'; title: string; subtitle: string; date?: string; image?: string | null; source?: string; rating?: number | null; channelId?: string; channelName?: string }
 
 function dateLabel(value?: string) {
   if (!value) return 'Trending now'
@@ -50,12 +51,17 @@ export default function EventsSpotlight() {
       subtitle: event.competition || 'Upcoming fixture', date: event.start_time,
       image: event.image, source: event.source,
     }))
+    const programs = (feed?.channelPrograms || []).map(program => ({
+      id: 'program:' + program.id, kind: 'program' as const, title: program.title,
+      subtitle: [program.channelName, program.category].filter(Boolean).join(' · '),
+      date: program.startsAt, source: program.source, channelId: program.channelId, channelName: program.channelName,
+    }))
     const movies = (feed?.trendingMovies || []).map(movie => ({
       id: 'movie:' + movie.id, kind: 'movie' as const, title: movie.title,
       subtitle: [movie.releaseYear, movie.overview].filter(Boolean).join(' · '),
       image: movie.backdrop || movie.poster, source: movie.source, rating: movie.rating,
     }))
-    return [...fixtures, ...movies]
+    return [...fixtures, ...programs, ...movies]
   }, [feed])
 
   useEffect(() => { if (index >= items.length) setIndex(0) }, [index, items.length])
@@ -82,7 +88,7 @@ export default function EventsSpotlight() {
       </div>
       <div className="max-w-3xl">
         <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#e50914] px-3 py-1.5 text-white">{item.kind === 'fixture' ? <Trophy size={13}/> : <Film size={13}/>} {item.kind === 'fixture' ? (started ? 'Scheduled start' : 'Upcoming event') : 'Trending movie'}</span>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#e50914] px-3 py-1.5 text-white">{item.kind === 'fixture' ? <Trophy size={13}/> : item.kind === 'program' ? <Tv size={13}/> : <Film size={13}/>} {item.kind === 'fixture' ? (started ? 'Scheduled start' : 'Upcoming event') : item.kind === 'program' ? 'On your channels' : 'Trending movie'}</span>
           {item.date && <span className="rounded-full border border-white/15 bg-black/25 px-3 py-1.5 text-white/75">{countdown(item.date, now)}</span>}
           {typeof item.rating === 'number' && <span className="rounded-full border border-white/15 bg-black/25 px-3 py-1.5 text-white/75">★ {item.rating.toFixed(1)} / 10</span>}
         </div>
@@ -90,7 +96,7 @@ export default function EventsSpotlight() {
         <p className="mt-2 line-clamp-2 text-sm font-medium text-white/70 sm:text-base">{item.subtitle}</p>
         <p className="mt-3 flex items-center gap-2 text-xs text-white/55"><CalendarDays size={14}/>{dateLabel(item.date)}</p>
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Link to={item.kind === 'fixture' ? '/events' : '/movies'} className="inline-flex items-center gap-2 rounded-xl bg-[#e50914] px-5 py-3 text-sm font-bold transition hover:bg-[#c90812]">{item.kind === 'fixture' ? 'View event schedule' : 'Browse movies'} <ArrowRight size={16}/></Link>
+          <Link to={item.kind === 'fixture' ? '/events' : item.kind === 'program' ? '/live?open=' + encodeURIComponent(item.channelId || '') + '&title=' + encodeURIComponent(item.channelName || '') : '/movies'} className="inline-flex items-center gap-2 rounded-xl bg-[#e50914] px-5 py-3 text-sm font-bold transition hover:bg-[#c90812]">{item.kind === 'fixture' ? 'View event schedule' : item.kind === 'program' ? 'Open channel' : 'Browse movies'} <ArrowRight size={16}/></Link>
           <span className="text-[11px] text-white/40">Data: {item.source || 'JokStream feed'}</span>
         </div>
       </div>
