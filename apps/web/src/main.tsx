@@ -6,7 +6,7 @@ import './styles.css'
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
-      // Caching is an optimization; playback must continue without a service worker.
+      // Cache is an optimization; playback must continue without it.
     })
   }, { once: true })
 }
