@@ -223,6 +223,15 @@ app.get('/api/catalog', async (req, res) => {
 })
 
 const artworkCache = new Map<string, { expiresAt: number; value: any }>()
+const artworkInFlight = new Map<string, Promise<any>>()
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, task: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) { const index = next++; results[index] = await task(items[index]) }
+  }))
+  return results
+}
 async function lookupCinemetaArtwork(kind: 'movie' | 'series', title: string) {
   try {
     const searchUrl = 'https://v3-cinemeta.strem.io/catalog/' + kind + '/top/search=' + encodeURIComponent(title) + '.json'
@@ -251,48 +260,56 @@ async function lookupCinemetaArtwork(kind: 'movie' | 'series', title: string) {
   } catch { return null }
 }
 
-async function lookupArtwork(kind: 'movie' | 'series', title: string) {
-  const key = kind + ':' + title.toLocaleLowerCase('en')
+async function lookupArtwork(kind: 'movie' | 'series', title: string, yearHint = '') {
+  const key = kind + ':' + title.toLocaleLowerCase('en') + ':' + yearHint
   const cached = artworkCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.value
+  const pending = artworkInFlight.get(key)
+  if (pending) return pending
 
-  let value: any = null
-  if (env.TMDB_API_KEY) {
-    try {
-      const endpoint = kind === 'movie' ? 'movie' : 'tv'
-      const url = new URL('https://api.themoviedb.org/3/search/' + endpoint)
-      url.searchParams.set('query', title)
-      url.searchParams.set('include_adult', 'false')
-      url.searchParams.set('language', 'en-US')
-      url.searchParams.set('page', '1')
-      url.searchParams.set('api_key', env.TMDB_API_KEY)
-      const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
-      if (response.ok) {
-        const body = await response.json() as { results?: Array<any> }
-        const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
-        const match = (body.results || []).find(item => normalize(String(item.title || item.name || item.original_title || item.original_name || '')) === normalize(title))
-        if (match) value = {
-          matched: true,
-          id: match.id,
-          title: match.title || match.name,
-          poster: match.poster_path ? 'https://image.tmdb.org/t/p/w500' + match.poster_path : null,
-          backdrop: match.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + match.backdrop_path : null,
-          overview: match.overview || '',
-          releaseYear: String(match.release_date || match.first_air_date || '').slice(0, 4),
-          rating: typeof match.vote_average === 'number' ? match.vote_average : null,
-          genres: []
+  const task = (async () => {
+    let value: any = null
+    if (env.TMDB_API_KEY) {
+      try {
+        const endpoint = kind === 'movie' ? 'movie' : 'tv'
+        const url = new URL('https://api.themoviedb.org/3/search/' + endpoint)
+        url.searchParams.set('query', title)
+        url.searchParams.set('include_adult', 'false')
+        url.searchParams.set('language', 'en-US')
+        url.searchParams.set('page', '1')
+        if (yearHint) url.searchParams.set(kind === 'movie' ? 'year' : 'first_air_date_year', yearHint)
+        url.searchParams.set('api_key', env.TMDB_API_KEY)
+        const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
+        if (response.ok) {
+          const body = await response.json() as { results?: Array<any> }
+          const normalize = (v: string) => v.toLocaleLowerCase('en').replace(/\(\d{4}\)/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+          const matches = (body.results || []).filter(item => normalize(String(item.title || item.name || item.original_title || item.original_name || '')) === normalize(title))
+          const match = (yearHint ? matches.find(item => String(item.release_date || item.first_air_date || '').startsWith(yearHint)) : null) || matches[0]
+          if (match) value = {
+            matched: true,
+            id: match.id,
+            title: match.title || match.name,
+            poster: match.poster_path ? 'https://image.tmdb.org/t/p/w500' + match.poster_path : null,
+            backdrop: match.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + match.backdrop_path : null,
+            overview: match.overview || '',
+            releaseYear: String(match.release_date || match.first_air_date || '').slice(0, 4),
+            rating: typeof match.vote_average === 'number' ? match.vote_average : null,
+            genres: []
+          }
         }
-      }
-    } catch { /* fall back to Cinemeta below */ }
-  }
+      } catch { /* fall back to Cinemeta below */ }
+    }
 
-  if (!value?.poster) {
-    const fallback = await lookupCinemetaArtwork(kind, title)
-    if (fallback?.matched && fallback.poster) value = { ...(value || {}), ...fallback, poster: fallback.poster, source: 'cinemeta' }
-  }
-  if (!value) value = { matched: false }
-  artworkCache.set(key, { expiresAt: Date.now() + (value.matched ? 24 : 6) * 60 * 60_000, value })
-  return value
+    if (!value?.poster) {
+      const fallback = await lookupCinemetaArtwork(kind, title)
+      if (fallback?.matched && fallback.poster) value = { ...(value || {}), ...fallback, poster: fallback.poster, source: 'cinemeta' }
+    }
+    if (!value) value = { matched: false }
+    artworkCache.set(key, { expiresAt: Date.now() + (value.matched ? 24 : 6) * 60 * 60_000, value })
+    return value
+  })()
+  artworkInFlight.set(key, task)
+  try { return await task } finally { artworkInFlight.delete(key) }
 }
 app.get('/api/artwork/:kind', async (req, res) => {
   const kind = String(req.params.kind)
@@ -493,14 +510,14 @@ app.get('/api/home-catalog', async (_req, res) => {
         })
         rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
       }
-      const enriched = await Promise.all(rows.filter(cleanCatalogRow).map(async (row: any) => {
+      const enriched = await mapWithConcurrency(rows.filter(cleanCatalogRow), 4, async (row: any) => {
         const itemId = String(row.item_id ?? row.id)
         const title = String(row.name || '').trim()
         const existingDate = String(row.release_date || '')
         const titleYear = title.match(/\b((?:19|20)\d{2})\b/)?.[1] || ''
         const needsArtwork = !row.image_url && !row.poster_path
         const needsMetadata = !existingDate || typeof row.vote_average !== 'number' || needsArtwork
-        const artwork = needsMetadata ? await lookupArtwork(kind, title) : null
+        const artwork = needsMetadata ? await lookupArtwork(kind, title, titleYear) : null
         const releaseDate = existingDate || (artwork?.releaseYear ? artwork.releaseYear + '-01-01' : titleYear ? titleYear + '-01-01' : '')
         return {
           id: itemId, item_id: itemId, title,
@@ -513,7 +530,7 @@ app.get('/api/home-catalog', async (_req, res) => {
           backdrop: row.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + row.backdrop_path : artwork?.backdrop || null,
           kind, category: row.category || '', streamAvailable: true
         }
-      }))
+      })
       return enriched
     }
     const [latestMovies, latestSeries, topMovies, topSeries] = await Promise.all([
