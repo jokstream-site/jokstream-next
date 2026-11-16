@@ -7,7 +7,7 @@ import AdSlot from '../components/AdSlot'
 
 const API = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || ''
 type Channel = { id: string; item_id?: string; name: string }
-type DiscoveryTitle = { id: number; title: string; overview?: string; releaseDate?: string; year?: string; rating?: number; poster?: string | null; backdrop?: string | null }
+type DiscoveryTitle = { id: string; title: string; overview?: string; releaseDate?: string; year?: string; rating?: number; poster?: string | null; backdrop?: string | null; item_id?: string; streamAvailable?: boolean }
 type Discovery = { latestMovies: DiscoveryTitle[]; latestSeries: DiscoveryTitle[]; topMovies: DiscoveryTitle[]; topSeries: DiscoveryTitle[]; updatedAt: string }
 function imageSrc(value?: string | null) { return value && /^https?:\/\//i.test(value) ? value : '' }
 
@@ -29,7 +29,7 @@ export default function HomePage() {
     let active = true
     fetch(API + '/api/live?page=1&limit=1').then(response => response.ok ? response.json() : Promise.reject())
       .then(data => { if (active && data.items?.[0]) setHeroChannel(data.items[0] as Channel) }).catch(() => { if (active) setHeroChannel(null) })
-    fetch(API + '/api/home-discovery').then(response => response.ok ? response.json() : Promise.reject())
+    fetch(API + '/api/home-catalog').then(response => response.ok ? response.json() : Promise.reject())
       .then(data => { if (active) setDiscovery(data as Discovery) }).catch(() => { if (active) setDiscovery(null) })
     return () => { active = false }
   }, [])
@@ -66,10 +66,10 @@ export default function HomePage() {
     </section>
     <EventsSpotlight/>
     <AdSlot placement="section-banner" className="my-2 min-h-0"/>
-    <DiscoveryRail title="Latest Movies" items={discovery?.latestMovies || []} kind="movie" subtitle="Recently released movies · TMDB"/>
-    <DiscoveryRail title="Latest TV Series" items={discovery?.latestSeries || []} kind="series" subtitle="Recently released TV series · TMDB"/>
-    <DiscoveryRail title="Top-Rated Movies" items={discovery?.topMovies || []} kind="movie" subtitle="Highest-rated movies · TMDB"/>
-    <DiscoveryRail title="Top-Rated TV Series" items={discovery?.topSeries || []} kind="series" subtitle="Highest-rated TV series · TMDB"/>
+    <DiscoveryRail title="Latest Movies" items={discovery?.latestMovies || []} kind="movie" subtitle="Recently released titles in your subscription"/>
+    <DiscoveryRail title="Latest TV Series" items={discovery?.latestSeries || []} kind="series" subtitle="Recently released series in your subscription"/>
+    <DiscoveryRail title="Top-Rated Movies" items={discovery?.topMovies || []} kind="movie" subtitle="Highest-rated movies available in your subscription"/>
+    <DiscoveryRail title="Top-Rated TV Series" items={discovery?.topSeries || []} kind="series" subtitle="Highest-rated series available in your subscription"/>
     <section><h2 className="mb-4 text-xl font-bold">Explore JokStream</h2><div className="grid grid-cols-2 gap-3 md:grid-cols-3">{[[Tv,'Live TV','/live'],[Film,'Movies','/movies'],[Clapperboard,'Series','/series']].map(([Icon,label,to]:any)=><Link key={label} to={to} className="flex min-h-32 flex-col justify-between rounded-2xl border border-white/10 bg-[#171923] p-5 transition hover:border-[#e50914]/60"><Icon size={27} className="text-[#e50914]"/><span className="flex items-center justify-between font-bold">{label}<ArrowRight size={16}/></span></Link>)}</div></section>
     {watching && <WatchChannelModal channel={watching} onClose={() => setWatching(null)}/>}
   </div>
