@@ -354,6 +354,43 @@ async function inspect(cfg, action, label) {
     count: Array.isArray(data) ? data.length : null,
     sample: Array.isArray(data) ? data.slice(0, 8).map(x => x.name || x.title || x.category_name || "بدون اسم") : null };
 }
+async function inspectLiveChannels(cfg, url) {
+  const response = await apiFetch(cfg, { action: "get_live_streams" });
+  if (!response.ok) return { test: "live_channels", ok: false, status: response.status };
+  const data = await response.json();
+  if (!Array.isArray(data)) return { test: "live_channels", ok: false, error: "unexpected_provider_response" };
+  const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit")) || 100));
+  const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+  const query = (url.searchParams.get("q") || "").trim().toLowerCase();
+  const categoryId = (url.searchParams.get("category_id") || "").trim();
+  const filtered = data.filter(item => {
+    if (categoryId && String(item.category_id ?? "") !== categoryId) return false;
+    if (!query) return true;
+    return [item.name, item.stream_id, item.epg_channel_id, item.category_name]
+      .some(value => value != null && String(value).toLowerCase().includes(query));
+  });
+  const channels = filtered.slice(offset, offset + limit).map(item => ({
+    id: item.stream_id ?? null,
+    name: item.name ?? null,
+    categoryId: item.category_id ?? null,
+    categoryName: item.category_name ?? null,
+    streamType: item.stream_type ?? "live",
+    containerExtension: item.container_extension ?? null,
+    epgChannelId: item.epg_channel_id ?? null,
+    hasDirectSource: Boolean(item.direct_source)
+  }));
+  return { test: "live_channels", ok: true, total: data.length, matched: filtered.length,
+    offset, limit, returned: channels.length, hasMore: offset + channels.length < filtered.length,
+    query: query || null, categoryId: categoryId || null, channels };
+}
+async function inspectLiveCategories(cfg) {
+  const response = await apiFetch(cfg, { action: "get_live_categories" });
+  if (!response.ok) return { test: "live_categories", ok: false, status: response.status };
+  const data = await response.json();
+  if (!Array.isArray(data)) return { test: "live_categories", ok: false, error: "unexpected_provider_response" };
+  return { test: "live_categories", ok: true, count: data.length,
+    categories: data.map(item => ({ id: item.category_id ?? null, name: item.category_name ?? null })) };
+}
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
@@ -435,9 +472,10 @@ export default {
         const names = [...body.matchAll(/#EXTINF:[^,]*,([^\r\n]+)/g)].map(match => match[1].trim());
         return json({ test: "playlist", ok: true, status: response.status, bytes: new TextEncoder().encode(body).length, entries: names.length, sample: names.slice(0, 8) });
       }
+      if (url.pathname === "/test-live-channels") return json(await inspectLiveChannels(cfg, url));
+      if (url.pathname === "/test-live-categories") return json(await inspectLiveCategories(cfg));
       const map = {
         "/test-live": ["get_live_streams", "live"],
-        "/test-live-categories": ["get_live_categories", "liveCategories"],
         "/test-movies": ["get_vod_streams", "movies"],
         "/test-movie-categories": ["get_vod_categories", "movieCategories"],
         "/test-series": ["get_series", "series"],
