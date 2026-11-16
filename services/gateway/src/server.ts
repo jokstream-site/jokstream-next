@@ -530,7 +530,7 @@ app.get('/api/home-catalog', async (_req, res) => {
           backdrop: row.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + row.backdrop_path : artwork?.backdrop || null,
           kind, category: row.category || '', streamAvailable: true
         }
-      }))
+      })
       return enriched
     }
     const [latestMovies, latestSeries, topMovies, topSeries] = await Promise.all([
