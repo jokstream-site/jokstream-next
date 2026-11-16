@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, CalendarDays, Clock3, Flame, Film, Trophy } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CalendarDays, Flame, Film, Trophy } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 const API = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || ''
