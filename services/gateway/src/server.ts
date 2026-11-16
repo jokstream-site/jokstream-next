@@ -329,7 +329,7 @@ async function getPagedCatalog(kind: 'live' | 'movie' | 'series', req: express.R
       p_kind: kind, p_query: search, p_category: category,
       p_sort: String(req.query.sort || 'name_asc').slice(0, 32),
       p_genre: String(req.query.genre || '').slice(0, 80) || null,
-      p_year: /^\\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : null,
+      p_year: /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : null,
       p_min_rating: Number.isFinite(Number(req.query.minRating)) && req.query.minRating !== undefined && req.query.minRating !== '' ? Math.max(0, Math.min(10, Number(req.query.minRating))) : null,
       p_limit: chunkSize, p_offset: sourceOffset
     })
