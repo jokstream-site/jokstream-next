@@ -163,7 +163,7 @@ async function resolvePlaylistStreamTarget(cfg, id, kind = 'live') {
       });
       const categoryMatch = segments.some(part => part.toLowerCase() === kind);
       if (!categoryMatch) continue;
-const segmentMatch = segments.some(part => new RegExp("^" + id + "(?:\\.(?:ts|m3u8|mp4|mkv|avi))?$", "i").test(part));
+      const segmentMatch = segments.some(part => new RegExp("^" + id + "(?:\\.(?:ts|m3u8|mp4|mkv|avi))?$", "i").test(part));
       const queryMatch = [...candidate.searchParams.entries()].some(([key, val]) =>
         /^(?:stream_?id|id)$/i.test(key) && val === id);
       if (segmentMatch || queryMatch) {
