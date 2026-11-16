@@ -392,6 +392,68 @@ for (const [path, kind] of [['/api/live', 'live'], ['/api/movies', 'movie'], ['/
   })
 }
 
+
+let homeMetadataRefreshAt = 0
+let homeMetadataRefresh: Promise<void> | null = null
+
+async function refreshHomeMetadata() {
+  if (!env.TMDB_API_KEY || !env.CATALOG_SYNC_SECRET) return
+  if (homeMetadataRefresh) return homeMetadataRefresh
+  if (Date.now() - homeMetadataRefreshAt < 10 * 60_000) return
+  homeMetadataRefreshAt = Date.now()
+  homeMetadataRefresh = (async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const discover = async (kind: 'movie' | 'series', sort: 'latest' | 'top') => {
+      const endpoint = kind === 'movie' ? 'movie' : 'tv'
+      const url = new URL('https://api.themoviedb.org/3/discover/' + endpoint)
+      url.searchParams.set('api_key', env.TMDB_API_KEY!)
+      url.searchParams.set('language', 'en-US')
+      url.searchParams.set('include_adult', 'false')
+      url.searchParams.set('sort_by', sort === 'latest'
+        ? (kind === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc')
+        : 'vote_average.desc')
+      if (sort === 'latest') {
+        url.searchParams.set(kind === 'movie' ? 'primary_release_date.lte' : 'first_air_date.lte', today)
+        url.searchParams.set(kind === 'movie' ? 'primary_release_date.gte' : 'first_air_date.gte', '2000-01-01')
+      } else {
+        url.searchParams.set('vote_count.gte', '250')
+        url.searchParams.set('vote_average.gte', '6')
+      }
+      const pages = await Promise.all([1, 2].map(async page => {
+        const pageUrl = new URL(url)
+        pageUrl.searchParams.set('page', String(page))
+        const response = await fetch(pageUrl, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(9000) })
+        if (!response.ok) return []
+        const body = await response.json() as { results?: any[] }
+        return Array.isArray(body.results) ? body.results : []
+      }))
+      return pages.flat().map((item: any) => ({
+        tmdb_id: Number(item.id),
+        title: String(item.title || item.name || '').trim(),
+        release_date: String(item.release_date || item.first_air_date || ''),
+        vote_count: Number(item.vote_count || 0),
+        vote_average: Number(item.vote_average || 0),
+        overview: String(item.overview || '').slice(0, 4000),
+        poster_path: item.poster_path || '',
+        backdrop_path: item.backdrop_path || ''
+      })).filter(item => item.tmdb_id > 0 && item.title && /^\d{4}-\d{2}-\d{2}$/.test(item.release_date))
+    }
+    const [movieLatest, movieTop, seriesLatest, seriesTop] = await Promise.all([
+      discover('movie', 'latest'), discover('movie', 'top'),
+      discover('series', 'latest'), discover('series', 'top')
+    ])
+    const merge = (items: any[]) => Array.from(new Map(items.map(item => [item.tmdb_id, item])).values())
+    await Promise.all([
+      supabaseRpc('jok_catalog_metadata_upsert_tmdb', { p_token: env.CATALOG_SYNC_SECRET, p_kind: 'movie', p_items: merge([...movieLatest, ...movieTop]) }),
+      supabaseRpc('jok_catalog_metadata_upsert_tmdb', { p_token: env.CATALOG_SYNC_SECRET, p_kind: 'series', p_items: merge([...seriesLatest, ...seriesTop]) })
+    ])
+    artworkCache.delete('provider-home-catalog')
+  })().catch(error => {
+    console.warn('[tmdb-home-refresh]', error instanceof Error ? error.message : 'refresh_failed')
+  }).finally(() => { homeMetadataRefresh = null })
+  return homeMetadataRefresh
+}
+
 app.get('/api/home-catalog', async (_req, res) => {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return res.status(503).json({ error: 'catalog_storage_not_configured' })
   const cacheKey = 'provider-home-catalog'
@@ -401,10 +463,12 @@ app.get('/api/home-catalog', async (_req, res) => {
     return res.json(cached.value)
   }
   try {
+    const refresh = refreshHomeMetadata()
+    if (!cached && !homeMetadataRefreshAt) await Promise.race([refresh, new Promise(resolve => setTimeout(resolve, 5500))])
     const load = async (kind: 'movie' | 'series', sort: 'release_newest' | 'rating_highest') => {
       const result = await supabaseRpc('jok_catalog_page_sorted', {
         p_kind: kind, p_query: '', p_category: '', p_sort: sort,
-        p_genre: null, p_year: null, p_min_rating: sort === 'rating_highest' ? 1 : null,
+        p_genre: null, p_year: null, p_min_rating: sort === 'rating_highest' ? 6 : null,
         p_limit: 14, p_offset: 0
       })
       const rows = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : []
@@ -413,6 +477,7 @@ app.get('/api/home-catalog', async (_req, res) => {
         overview: String(row.overview || ''), releaseDate: String(row.release_date || ''),
         year: String(row.release_date || '').slice(0, 4),
         rating: typeof row.vote_average === 'number' ? row.vote_average : null,
+        voteCount: Number(row.vote_count || 0),
         poster: row.image_url || (row.poster_path ? 'https://image.tmdb.org/t/p/w500' + row.poster_path : null),
         backdrop: row.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + row.backdrop_path : null,
         kind, category: row.category || '', streamAvailable: true
@@ -422,7 +487,7 @@ app.get('/api/home-catalog', async (_req, res) => {
       load('movie', 'release_newest'), load('series', 'release_newest'),
       load('movie', 'rating_highest'), load('series', 'rating_highest')
     ])
-    const payload = { updatedAt: new Date().toISOString(), latestMovies, latestSeries, topMovies, topSeries, source: 'provider_catalog' }
+    const payload = { updatedAt: new Date().toISOString(), latestMovies, latestSeries, topMovies, topSeries, source: 'provider_catalog_tmdb_ranked' }
     artworkCache.set(cacheKey, { expiresAt: Date.now() + 2 * 60_000, value: payload })
     res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=600')
     res.json(payload)
@@ -431,43 +496,142 @@ app.get('/api/home-catalog', async (_req, res) => {
   }
 })
 
-app.get('/api/hero-events', async (_req, res) => {
-  const key = 'hero-events'
-  const cached = artworkCache.get(key)
-  if (cached && cached.expiresAt > Date.now()) return res.json(cached.value)
+function decodeEpgText(value: unknown) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(raw) && raw.length >= 8) {
+    try {
+      const decoded = Buffer.from(raw, 'base64').toString('utf8').trim()
+      if (decoded && /[A-Za-z0-9]/.test(decoded)) return decoded
+    } catch { /* provider may return plain text */ }
+  }
+  return raw
+}
+
+function epgDate(value: any, timestamp: any) {
+  const seconds = Number(timestamp)
+  if (Number.isFinite(seconds) && seconds > 0) return new Date(seconds * 1000).toISOString()
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  const parsed = new Date(raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z')
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
+}
+
+async function loadProviderChannelEpg(channel: any) {
+  if (!env.XTREAM_API_BASE_URL || !env.XTREAM_PROXY_TOKEN) return []
   try {
-    const dates = [0, 1].map(offset => {
+    const params = new URLSearchParams({ action: 'get_short_epg', stream_id: String(channel.item_id), limit: '6' })
+    const base = env.XTREAM_API_BASE_URL.replace(/\/$/, '')
+    const response = await xtreamFetch(base + (base.includes('?') ? '&' : '?') + params.toString(), 7000)
+    if (!response.ok) return []
+    const body = await response.json() as any
+    const rows = Array.isArray(body?.epg_listings) ? body.epg_listings
+      : Array.isArray(body?.epg_list) ? body.epg_list
+      : Array.isArray(body?.data) ? body.data : []
+    return rows.map((row: any) => ({
+      id: String(row.id || row.epg_id || [channel.item_id, row.start_timestamp || row.start, row.title].join(':')),
+      channelId: String(channel.item_id),
+      channelName: String(channel.name || ''),
+      category: String(channel.category || ''),
+      title: decodeEpgText(row.title || row.name),
+      description: decodeEpgText(row.description).slice(0, 500),
+      startsAt: epgDate(row.start || row.start_time, row.start_timestamp),
+      endsAt: epgDate(row.end || row.end_time, row.stop_timestamp || row.end_timestamp),
+      source: 'Provider EPG'
+    })).filter((row: any) => row.title && row.startsAt && Date.parse(row.startsAt) >= Date.now() - 5 * 60_000 && Date.parse(row.startsAt) <= Date.now() + 72 * 60 * 60_000)
+  } catch { return [] }
+}
+
+let heroRefreshAt = 0
+let heroRefresh: Promise<any> | null = null
+async function buildHeroEvents() {
+  if (heroRefresh) return heroRefresh
+  if (Date.now() - heroRefreshAt < 5 * 60_000) return null
+  heroRefreshAt = Date.now()
+  heroRefresh = (async () => {
+    const dates = [0, 1, 2].map(offset => {
       const d = new Date()
       d.setUTCDate(d.getUTCDate() + offset)
       return d.toISOString().slice(0, 10)
     })
-    const feeds = await Promise.all(dates.map(async date => {
-      const url = new URL('https://www.thesportsdb.com/api/v1/json/3/eventsday.php')
-      url.searchParams.set('d', date)
-      url.searchParams.set('s', 'Soccer')
-      const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) })
-      if (!response.ok) return []
-      const body = await response.json() as { events?: any[] | null }
-      return body.events || []
-    }))
-    const events = feeds.flat().map((event: any) => ({
-      id: String(event.idEvent || ''),
-      title: [event.strEvent, event.strLeague].filter(Boolean).join(' · '),
-      homeTeam: event.strHomeTeam || '',
-      awayTeam: event.strAwayTeam || '',
-      competition: event.strLeague || '',
-      start_time: event.strTimestamp || (event.dateEvent && event.strTime ? event.dateEvent + 'T' + event.strTime + 'Z' : null),
-      image: event.strThumb || event.strPoster || null,
-      source: 'TheSportsDB',
-      linked_channel_id: null,
-      channelMatchStatus: 'unmatched'
-    })).filter((event: any) => event.id && event.title && event.start_time && Date.parse(event.start_time) >= Date.now() - 60000)
-    const trendingMovies: any[] = []
-    const payload = { updatedAt: new Date().toISOString(), events, trendingMovies, note: 'Broadcast channels are not inferred; no channel is linked unless a verified provider mapping exists.' }
-    artworkCache.set(key, { expiresAt: Date.now() + 15 * 60_000, value: payload })
-    res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=600')
-    res.json(payload)
-  } catch { res.status(502).json({ error: 'sports_feed_unavailable' }) }
+    const sportsRequests = dates.map(async date => {
+      try {
+        const url = new URL('https://www.thesportsdb.com/api/v1/json/3/eventsday.php')
+        url.searchParams.set('d', date)
+        url.searchParams.set('s', 'Soccer')
+        const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(7000) })
+        if (!response.ok) return []
+        const body = await response.json() as { events?: any[] | null }
+        return body.events || []
+      } catch { return [] }
+    })
+    const channelSearches = ['sport', 'movie', 'cinema', 'film', 'series'].map(async query => {
+      try {
+        const result = await supabaseRpc('jok_catalog_page_sorted', {
+          p_kind: 'live', p_query: query, p_category: '', p_sort: 'name_asc',
+          p_genre: null, p_year: null, p_min_rating: null, p_limit: 30, p_offset: 0
+        })
+        return Array.isArray(result?.items) ? result.items : []
+      } catch { return [] }
+    })
+    const [sportsRows, channelGroups] = await Promise.all([Promise.all(sportsRequests), Promise.all(channelSearches)])
+    const channels = Array.from(new Map(channelGroups.flat().map((channel: any) => [String(channel.item_id || channel.id), channel])).values())
+      .filter((channel: any) => /^\d+$/.test(String(channel.item_id || channel.id || '')))
+    const sportsChannels = channels.filter((channel: any) => /sport|football|soccer|match|bein|espn|dazn/i.test(String(channel.name) + ' ' + String(channel.category))).slice(0, 8)
+    const entertainmentChannels = channels.filter((channel: any) => /movie|cinema|film|series|drama|hbo|premiere/i.test(String(channel.name) + ' ' + String(channel.category))).slice(0, 12)
+    const selectedChannels = Array.from(new Map([...sportsChannels, ...entertainmentChannels].map((channel: any) => [String(channel.item_id || channel.id), channel])).values())
+    const epgGroups = await Promise.all(selectedChannels.map(loadProviderChannelEpg))
+    const channelPrograms = epgGroups.flat().sort((a: any, b: any) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
+    const norm = (value: string) => value.toLocaleLowerCase('en').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
+    const events = sportsRows.flat().map((event: any) => {
+      const title = String(event.strEvent || '')
+      const home = norm(String(event.strHomeTeam || ''))
+      const away = norm(String(event.strAwayTeam || ''))
+      const matching = channelPrograms.find((program: any) => {
+        const text = norm(program.title + ' ' + program.description)
+        return home && away && text.includes(home) && text.includes(away)
+      })
+      return {
+        id: String(event.idEvent || ''),
+        title: [title, event.strLeague].filter(Boolean).join(' · '),
+        homeTeam: event.strHomeTeam || '',
+        awayTeam: event.strAwayTeam || '',
+        competition: event.strLeague || '',
+        start_time: event.strTimestamp || (event.dateEvent && event.strTime ? event.dateEvent + 'T' + event.strTime + 'Z' : null),
+        image: event.strThumb || event.strPoster || null,
+        source: 'TheSportsDB',
+        linked_channel_id: matching?.channelId || null,
+        linked_channel_name: matching?.channelName || null,
+        channelMatchStatus: matching ? 'verified_epg_match' : 'unmatched'
+      }
+    }).filter((event: any) => event.id && event.title && event.start_time && Date.parse(event.start_time) >= Date.now() - 60_000)
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      events: Array.from(new Map(events.map((event: any) => [event.id, event])).values()).sort((a: any, b: any) => Date.parse(a.start_time) - Date.parse(b.start_time)),
+      channelPrograms,
+      trendingMovies: [],
+      note: 'Only programmes returned by the subscribed provider EPG are shown. A fixture is linked to a channel only when its EPG text matches both teams.'
+    }
+    artworkCache.set('hero-events', { expiresAt: Date.now() + 5 * 60_000, value: payload })
+    return payload
+  })().catch(error => {
+    console.warn('[hero-events-refresh]', error instanceof Error ? error.message : 'refresh_failed')
+    return null
+  }).finally(() => { heroRefresh = null })
+  return heroRefresh
+}
+
+app.get('/api/hero-events', async (_req, res) => {
+  const cached = artworkCache.get('hero-events')
+  if (cached && cached.expiresAt > Date.now()) return res.json(cached.value)
+  const refresh = buildHeroEvents()
+  const payload = cached?.value || await Promise.race([refresh, new Promise(resolve => setTimeout(() => resolve(null), 6500))])
+  if (payload) {
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=240')
+    return res.json(payload)
+  }
+  res.setHeader('Cache-Control', 'public, max-age=15')
+  return res.json({ updatedAt: new Date().toISOString(), events: [], channelPrograms: [], trendingMovies: [], note: 'Provider schedule is warming up.' })
 })
 
 app.get('/api/status', (_req, res) => res.json({
