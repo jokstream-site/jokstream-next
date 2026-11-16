@@ -66,10 +66,10 @@ export default function HomePage() {
     </section>
     <EventsSpotlight/>
     <AdSlot placement="section-banner" className="my-2 min-h-0"/>
-    <DiscoveryRail title="أحدث الأفلام" items={discovery?.latestMovies || []} kind="movie" subtitle="Latest movie releases · TMDB"/>
-    <DiscoveryRail title="أحدث المسلسلات" items={discovery?.latestSeries || []} kind="series" subtitle="Latest TV releases · TMDB"/>
-    <DiscoveryRail title="أفضل الأفلام تقييماً" items={discovery?.topMovies || []} kind="movie" subtitle="Highest-rated movies · TMDB"/>
-    <DiscoveryRail title="أفضل المسلسلات تقييماً" items={discovery?.topSeries || []} kind="series" subtitle="Highest-rated TV · TMDB"/>
+    <DiscoveryRail title="Latest Movies" items={discovery?.latestMovies || []} kind="movie" subtitle="Recently released movies · TMDB"/>
+    <DiscoveryRail title="Latest TV Series" items={discovery?.latestSeries || []} kind="series" subtitle="Recently released TV series · TMDB"/>
+    <DiscoveryRail title="Top-Rated Movies" items={discovery?.topMovies || []} kind="movie" subtitle="Highest-rated movies · TMDB"/>
+    <DiscoveryRail title="Top-Rated TV Series" items={discovery?.topSeries || []} kind="series" subtitle="Highest-rated TV series · TMDB"/>
     <section><h2 className="mb-4 text-xl font-bold">Explore JokStream</h2><div className="grid grid-cols-2 gap-3 md:grid-cols-3">{[[Tv,'Live TV','/live'],[Film,'Movies','/movies'],[Clapperboard,'Series','/series']].map(([Icon,label,to]:any)=><Link key={label} to={to} className="flex min-h-32 flex-col justify-between rounded-2xl border border-white/10 bg-[#171923] p-5 transition hover:border-[#e50914]/60"><Icon size={27} className="text-[#e50914]"/><span className="flex items-center justify-between font-bold">{label}<ArrowRight size={16}/></span></Link>)}</div></section>
     {watching && <WatchChannelModal channel={watching} onClose={() => setWatching(null)}/>}
   </div>
