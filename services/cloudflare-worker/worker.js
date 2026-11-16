@@ -225,18 +225,43 @@ async function probePlaylistStream(cfg, id) {
   if (!playlist.ok) return { ok: false, stage: "playlist", status: playlist.status };
   const body = await playlist.text();
   let streamTarget = null;
-  for (const line of body.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+  let matchedBy = null;
+  const hosts = new Set();
+  let entries = 0;
+  let idMentions = 0;
+  const pathShapes = [];
+  for (const line of body.replace(/^\\uFEFF/, "").split(/\\r?\\n/)) {
     const value = line.trim();
     if (!value || value.startsWith("#")) continue;
+    entries++;
     try {
       const candidate = new URL(value, cfg.origin);
-      if (new RegExp("/" + id + "\\.(?:ts|m3u8|mp4)$", "i").test(candidate.pathname)) {
-        streamTarget = candidate;
-        break;
+      hosts.add(candidate.hostname);
+      const segments = candidate.pathname.split("/").filter(Boolean).map(part => {
+        try { return decodeURIComponent(part); } catch { return part; }
+      });
+      const segmentMatch = segments.find(part => new RegExp("^" + id + "(?:\\\\.(?:ts|m3u8|mp4))?$", "i").test(part));
+      const queryMatch = [...candidate.searchParams.entries()].some(([key, val]) =>
+        /^(?:stream_?id|id)$/i.test(key) && val === id);
+      if (segmentMatch || queryMatch) {
+        idMentions++;
+        if (!streamTarget) {
+          streamTarget = candidate;
+          matchedBy = segmentMatch ? "path_segment" : "query_parameter";
+        }
+      } else if (pathShapes.length < 5 && candidate.pathname.includes("/")) {
+        pathShapes.push({
+          host: candidate.hostname,
+          pathSegments: segments.length,
+          finalSegmentPattern: segments.length ? (segments[segments.length - 1].replace(/\\d/g, "N").slice(-18)) : ""
+        });
       }
     } catch {}
   }
-  if (!streamTarget) return { ok: false, stage: "playlist_lookup", matched: false };
+  if (!streamTarget) return {
+    ok: false, stage: "playlist_lookup", matched: false, entries,
+    idMentions, hosts: [...hosts].slice(0, 8), pathShapes
+  };
   const headers = {
     "User-Agent": "okhttp/5.0.0-alpha.2", Accept: "*/*", "Accept-Encoding": "identity",
     Referer: cfg.origin + "/", Origin: cfg.origin
@@ -247,28 +272,27 @@ async function probePlaylistStream(cfg, id) {
   try {
     for (let depth = 0; depth <= 4; depth++) {
       if (target.protocol !== "https:" || target.username || target.password) {
-        return { ok: false, stage: "playlist_target", error: "unsafe_target", streamHost: streamTarget.hostname, redirectChain };
+        return { ok: false, stage: "playlist_target", error: "unsafe_target", streamHost: streamTarget.hostname, matchedBy, redirectChain };
       }
       response = await fetch(target, { headers, redirect: "manual", signal: AbortSignal.timeout(25000) });
       if (response.status < 300 || response.status >= 400) break;
       const location = response.headers.get("Location");
       redirectChain.push({ status: response.status, host: target.hostname });
-      if (!location || depth === 4) return { ok: false, stage: "playlist_redirect", status: response.status, streamHost: streamTarget.hostname, redirectChain };
+      if (!location || depth === 4) return { ok: false, stage: "playlist_redirect", status: response.status, streamHost: streamTarget.hostname, matchedBy, redirectChain };
       target = new URL(location, target);
     }
   } catch (error) {
-    return { ok: false, stage: "playlist_fetch", error: error instanceof Error ? error.name : "fetch_failed", streamHost: streamTarget.hostname, redirectChain };
+    return { ok: false, stage: "playlist_fetch", error: error instanceof Error ? error.name : "fetch_failed", streamHost: streamTarget.hostname, matchedBy, redirectChain };
   }
   const result = {
     ok: response.ok, stage: "playlist_stream", status: response.status,
-    streamHost: streamTarget.hostname, finalHost: target.hostname,
+    matchedBy, streamHost: streamTarget.hostname, finalHost: target.hostname,
     contentType: response.headers.get("Content-Type"),
     contentLength: response.headers.get("Content-Length"), redirectChain
   };
   if (response.body) await response.body.cancel();
   return result;
 }
-
 function firstHlsResource(manifest) {
   for (const line of manifest.replace(/^\uFEFF/, '').split(/\r?\n/)) {
     const trimmed = line.trim();
