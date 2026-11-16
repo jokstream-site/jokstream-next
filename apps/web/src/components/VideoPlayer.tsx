@@ -16,7 +16,9 @@ type VideoPlayerProps = {
 
 const WATCHDOG_MS = 15_000
 const RETRY_DELAY_MS = 2_000
-const MAX_AUTO_RETRIES = 2
+const MAX_AUTO_RETRIES = 4
+const CONTROL_HIDE_DELAY_MS = 2_500
+const STALL_RECOVERY_MS = 10_000
 
 function resolvePlayableUrl(input: string) {
   const streamUrl = input.trim()
@@ -90,6 +92,8 @@ export default function VideoPlayer({
   const failCurrentAttemptRef = useRef<(message: string) => void>(() => {})
   const generationRef = useRef(0)
   const attemptTokenRef = useRef(0)
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const controlTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [state, setState] = useState<PlaybackState>('connecting')
   const [reason, setReason] = useState('')
@@ -100,12 +104,17 @@ export default function VideoPlayer({
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [buffered, setBuffered] = useState(0)
+  const [controlsVisible, setControlsVisible] = useState(true)
 
   const clearTimers = useCallback(() => {
     if (watchdogRef.current) clearTimeout(watchdogRef.current)
     if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
     watchdogRef.current = null
     retryTimerRef.current = null
+    if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
+    stallTimerRef.current = null
+    if (controlTimerRef.current) clearTimeout(controlTimerRef.current)
+    controlTimerRef.current = null
   }, [])
 
   const publishState = useCallback((next: PlaybackState, message = '') => {
@@ -192,9 +201,10 @@ export default function VideoPlayer({
           sourceIndexRef.current = sourceIndexRef.current === 0 ? 1 : 0
         }
         publishState('connecting', message)
+        const retryDelay = Math.min(RETRY_DELAY_MS * Math.pow(2, Math.max(0, attemptRef.current - 1)), 12_000)
         retryTimerRef.current = setTimeout(() => {
           if (generation === generationRef.current) startAttempt(generation)
-        }, RETRY_DELAY_MS)
+        }, retryDelay)
       } else {
         publishState('failed', message)
       }
@@ -216,10 +226,10 @@ export default function VideoPlayer({
       }, {
         enableWorker: true,
         enableStashBuffer: true,
-        stashInitialSize: 128 * 1024,
+        stashInitialSize: 384 * 1024,
         liveBufferLatencyChasing: true,
-        liveBufferLatencyMaxLatency: 8,
-        liveBufferLatencyMinRemain: 2,
+        liveBufferLatencyMaxLatency: 12,
+        liveBufferLatencyMinRemain: 3,
       })
       mpegtsRef.current = player
       player.on(mpegts.Events.ERROR, (_type, detail) => {
@@ -238,17 +248,26 @@ export default function VideoPlayer({
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        maxBufferLength: streamType === 'live' ? 32 : 90,
-        maxMaxBufferLength: streamType === 'live' ? 48 : 120,
+        maxBufferLength: streamType === 'live' ? 45 : 90,
+        maxMaxBufferLength: streamType === 'live' ? 90 : 120,
+        abrEwmaDefaultEstimate: 350_000,
+        abrBandWidthFactor: 0.85,
+        abrBandWidthUpFactor: 0.65,
         liveSyncDurationCount: 3,
         liveMaxLatencyDurationCount: 8,
         backBufferLength: streamType === 'live' ? 15 : 30,
         manifestLoadingTimeOut: WATCHDOG_MS,
         levelLoadingTimeOut: WATCHDOG_MS,
         fragLoadingTimeOut: WATCHDOG_MS,
-        manifestLoadingMaxRetry: 0,
-        levelLoadingMaxRetry: 0,
-        fragLoadingMaxRetry: 0,
+        manifestLoadingMaxRetry: 3,
+        manifestLoadingRetryDelay: 1_000,
+        manifestLoadingMaxRetryTimeout: 10_000,
+        levelLoadingMaxRetry: 3,
+        levelLoadingRetryDelay: 1_000,
+        levelLoadingMaxRetryTimeout: 10_000,
+        fragLoadingMaxRetry: 5,
+        fragLoadingRetryDelay: 1_000,
+        fragLoadingMaxRetryTimeout: 12_000,
       })
       hlsRef.current = hls
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -312,6 +331,21 @@ export default function VideoPlayer({
     }
     const onPause = () => setPaused(true)
     const onPlay = () => setPaused(false)
+    const scheduleStallRecovery = () => {
+      if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
+      stallTimerRef.current = setTimeout(() => {
+        if (!video.paused && video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+          if (hlsRef.current) hlsRef.current.startLoad(-1)
+          else if (mpegtsRef.current) {
+            try { mpegtsRef.current.unload(); mpegtsRef.current.load(); void Promise.resolve(mpegtsRef.current.play()).catch(() => {}) } catch { /* retry watchdog remains active */ }
+          }
+        }
+      }, STALL_RECOVERY_MS)
+    }
+    const clearStallRecovery = () => {
+      if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
+      stallTimerRef.current = null
+    }
     const onTime = () => {
       setCurrentTime(video.currentTime || 0)
       if (Number.isFinite(video.duration)) setDuration(video.duration)
@@ -330,6 +364,9 @@ export default function VideoPlayer({
       failCurrentAttemptRef.current(message)
     }
     video.addEventListener('playing', onPlaying)
+    video.addEventListener('waiting', scheduleStallRecovery)
+    video.addEventListener('stalled', scheduleStallRecovery)
+    video.addEventListener('canplay', clearStallRecovery)
     video.addEventListener('pause', onPause)
     video.addEventListener('play', onPlay)
     video.addEventListener('timeupdate', onTime)
@@ -338,6 +375,9 @@ export default function VideoPlayer({
     video.addEventListener('error', onError)
     return () => {
       video.removeEventListener('playing', onPlaying)
+      video.removeEventListener('waiting', scheduleStallRecovery)
+      video.removeEventListener('stalled', scheduleStallRecovery)
+      video.removeEventListener('canplay', clearStallRecovery)
       video.removeEventListener('pause', onPause)
       video.removeEventListener('play', onPlay)
       video.removeEventListener('timeupdate', onTime)
@@ -388,6 +428,18 @@ export default function VideoPlayer({
     else void target.requestFullscreen?.()
   }
 
+  const showControls = () => {
+    setControlsVisible(true)
+    if (controlTimerRef.current) clearTimeout(controlTimerRef.current)
+    if (!paused && state === 'playing') {
+      controlTimerRef.current = setTimeout(() => setControlsVisible(false), CONTROL_HIDE_DELAY_MS)
+    }
+  }
+  useEffect(() => {
+    showControls()
+    return () => { if (controlTimerRef.current) clearTimeout(controlTimerRef.current) }
+  }, [paused, state])
+
   const progress = duration > 0 ? currentTime / duration * 100 : 0
   const bufferedProgress = duration > 0 ? buffered / duration * 100 : 0
 
@@ -396,6 +448,10 @@ export default function VideoPlayer({
       className={'relative isolate aspect-video w-full overflow-hidden bg-black text-white ' + className}
       style={{ '--player-accent': '#E50914' } as CSSProperties}
       aria-label={title ? 'Video player: ' + title : 'Video player'}
+      onMouseMove={showControls}
+      onTouchStart={showControls}
+      onKeyDown={showControls}
+      onClick={event => { if (event.target === videoRef.current) { togglePlay(); showControls() } }}
     >
       <video ref={videoRef} className="h-full w-full bg-black object-contain" playsInline preload="auto" controls={false} aria-label={title || 'Video'} />
 
@@ -421,7 +477,7 @@ export default function VideoPlayer({
         </div>
       )}
 
-      <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/55 to-transparent px-4 pb-3 pt-10">
+      <div className={'absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/55 to-transparent px-4 pb-3 pt-10 transition-opacity duration-300 ' + (controlsVisible || paused || state !== 'playing' ? 'opacity-100' : 'pointer-events-none opacity-0')}>
         <div className="mb-3 flex items-center gap-3">
           <span className="text-[11px] tabular-nums text-white/75">{formatTime(currentTime)}</span>
           <div className="relative h-1 flex-1 rounded-full bg-white/20">
