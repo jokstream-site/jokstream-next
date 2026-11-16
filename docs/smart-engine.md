@@ -64,4 +64,10 @@ The worker uses a bounded entry count for JSON cache. Browser storage remains be
 4. Edge routing/cache: test cache-key isolation, authorization, regional latency, and origin fallback.
 5. P2P: verify rights, exact segment identity, peer density, upload limits, and HTTP fallback before any experiment.
 
+## Saved Moments and adaptive player
+
+- HLS rendition caps respond to browser network/device hints, buffer-ahead, and dropped-frame deltas. Downgrade quickly under stress and restore only after sustained stability.
+- HLS can only select renditions present in the source manifest; MPEG-TS and single-rendition streams cannot gain true ABR without source-side transcoding.
+- Saved Moments v1 stores local playback-position bookmarks only, never stream URLs, signed tokens, credentials, or media bytes. Live bookmarks require a seekable DVR window. This is not clip recording; clip export requires authorized media and compatible segment/DVR support.
+
 No PR from this project is merged and no production deployment is triggered without explicit approval after review.
