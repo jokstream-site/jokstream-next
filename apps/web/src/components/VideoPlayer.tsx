@@ -410,6 +410,7 @@ export default function VideoPlayer({
     const profile = getDeviceProfile()
     let stableSince = Date.now()
     let lastDropped = 0
+    let lastTotal = 0
     const timer = window.setInterval(() => {
       const hls = hlsRef.current
       if (!hls || !hls.levels.length || video.paused) return
@@ -418,8 +419,10 @@ export default function VideoPlayer({
       const dropped = playbackQuality?.droppedVideoFrames ?? 0
       const total = playbackQuality?.totalVideoFrames ?? 0
       const droppedDelta = Math.max(0, dropped - lastDropped)
+      const totalDelta = Math.max(1, total - lastTotal)
       lastDropped = dropped
-      const droppedRatio = total > 0 ? droppedDelta / Math.max(1, total) : 0
+      lastTotal = total
+      const droppedRatio = droppedDelta / totalDelta
       const safeCap = getSafeMaxLevel(hls.levels, profile.maxResolution, getNetworkEstimate())
       const stressed = ahead < (streamType === 'live' ? 7 : 5) || droppedRatio > 0.08
       if (stressed) {
