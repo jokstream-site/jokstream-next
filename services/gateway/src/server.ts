@@ -626,6 +626,7 @@ async function buildHeroEvents() {
     artworkCache.set('hero-events', { expiresAt: Date.now() + 5 * 60_000, value: payload })
     return payload
   })().catch(error => {
+    heroRefreshAt = 0
     console.warn('[hero-events-refresh]', error instanceof Error ? error.message : 'refresh_failed')
     return null
   }).finally(() => { heroRefresh = null })
@@ -635,14 +636,9 @@ async function buildHeroEvents() {
 app.get('/api/hero-events', async (_req, res) => {
   const cached = artworkCache.get('hero-events')
   if (cached && cached.expiresAt > Date.now()) return res.json(cached.value)
-  const refresh = buildHeroEvents()
-  const payload = cached?.value || await Promise.race([refresh, new Promise(resolve => setTimeout(() => resolve(null), 6500))])
-  if (payload) {
-    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=240')
-    return res.json(payload)
-  }
-  res.setHeader('Cache-Control', 'public, max-age=15')
-  return res.json({ updatedAt: new Date().toISOString(), events: [], channelPrograms: [], trendingMovies: [], note: 'Provider schedule is warming up.' })
+  void buildHeroEvents()
+  res.setHeader('Cache-Control', 'public, max-age=10, stale-while-revalidate=20')
+  return res.json(cached?.value || { updatedAt: new Date().toISOString(), events: [], channelPrograms: [], trendingMovies: [], note: 'Provider schedule is warming up.' })
 })
 
 app.get('/api/status', (_req, res) => res.json({
