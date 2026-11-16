@@ -194,3 +194,68 @@ begin
   return jsonb_build_object('items',rows,'total',n,'updatedAt',ts);
 end
 $function$;
+
+create or replace function public.jok_catalog_match_epg_programs(p_titles jsonb)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = pg_catalog, public
+as $function$
+declare
+  v_version uuid;
+  v_rows jsonb;
+begin
+  if jsonb_typeof(p_titles) <> 'array' or jsonb_array_length(p_titles) > 100 then
+    raise exception 'invalid_epg_title_batch';
+  end if;
+
+  select active_version into v_version
+  from public.jok_catalog_state
+  where singleton = true;
+
+  if v_version is null then
+    return '[]'::jsonb;
+  end if;
+
+  with incoming as (
+    select distinct btrim(value #>> '{}') as title,
+      lower(regexp_replace(regexp_replace(btrim(value #>> '{}'), '\m(19|20)[0-9]{2}\M', '', 'g'), '[^[:alnum:]]+', ' ', 'g')) as normalized_title
+    from jsonb_array_elements(p_titles)
+    where length(btrim(value #>> '{}')) between 1 and 300
+  ),
+  matched as (
+    select
+      incoming.title as program_title,
+      i.kind,
+      i.item_id,
+      m.release_date,
+      m.vote_average,
+      m.vote_count,
+      count(*) over (partition by incoming.normalized_title) as title_match_count
+    from incoming
+    join public.jok_catalog_items i
+      on i.version_id = v_version
+     and i.kind in ('movie','series')
+     and lower(regexp_replace(regexp_replace(btrim(i.name), '\m(19|20)[0-9]{2}\M', '', 'g'), '[^[:alnum:]]+', ' ', 'g')) = incoming.normalized_title
+    join public.jok_catalog_metadata m
+      on m.kind = i.kind and m.item_id = i.item_id and m.match_status = 'matched'
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'program_title', program_title,
+    'kind', kind,
+    'item_id', item_id,
+    'release_date', release_date,
+    'vote_average', vote_average,
+    'vote_count', vote_count
+  )), '[]'::jsonb)
+  into v_rows
+  from matched
+  where title_match_count = 1;
+
+  return v_rows;
+end
+$function$;
+
+revoke all on function public.jok_catalog_match_epg_programs(jsonb) from public;
+grant execute on function public.jok_catalog_match_epg_programs(jsonb) to anon, authenticated;
