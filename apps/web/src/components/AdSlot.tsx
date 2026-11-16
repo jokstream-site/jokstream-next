@@ -1,5 +1,3 @@
-import type { HTMLAttributes } from 'react'
-
 type AdSlotProps = { placement: 'player-preroll' | 'section-banner'; className?: string }
 
 /** Reserved, first-party mount point for the ad code supplied by the site owner.
