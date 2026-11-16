@@ -3,7 +3,7 @@ import Hls from 'hls.js'
 import mpegts from 'mpegts.js'
 import { AlertCircle, BookmarkPlus, Maximize, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
 import { getDeviceProfile, getNetworkEstimate, getSafeMaxLevel } from '../lib/smartPlayback'
-import { saveMoment } from '../lib/moments'
+import { listSavedMoments, saveMoment } from '../lib/moments'
 
 type PlaybackState = 'connecting' | 'playing' | 'failed'
 type VideoPlayerProps = {
@@ -96,6 +96,7 @@ export default function VideoPlayer({
   const attemptTokenRef = useRef(0)
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const controlTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const restoredPositionRef = useRef(false)
 
   const [state, setState] = useState<PlaybackState>('connecting')
   const [reason, setReason] = useState('')
@@ -181,6 +182,7 @@ export default function VideoPlayer({
     attemptRef.current = attemptNumber
     const attemptToken = ++attemptTokenRef.current
     setRetryCount(Math.max(0, attemptNumber - 1))
+    restoredPositionRef.current = false
     setCurrentTime(0)
     setDuration(0)
     setBuffered(0)
@@ -352,6 +354,12 @@ export default function VideoPlayer({
       if (stallTimerRef.current) clearTimeout(stallTimerRef.current)
       stallTimerRef.current = null
     }
+    const restoreSavedPosition = () => {
+      if (restoredPositionRef.current || streamType === 'live' || !title || !Number.isFinite(video.duration)) return
+      const key = [streamType || 'video', title.trim().toLowerCase()].join(':')
+      const saved = listSavedMoments().find(item => item.mediaKey === key && !item.live && item.position > 5 && item.position < video.duration - 10)
+      if (saved) { video.currentTime = saved.position; restoredPositionRef.current = true }
+    }
     const onTime = () => {
       setCurrentTime(video.currentTime || 0)
       if (Number.isFinite(video.duration)) setDuration(video.duration)
@@ -369,6 +377,7 @@ export default function VideoPlayer({
             : 'Unable to load stream'
       failCurrentAttemptRef.current(message)
     }
+    video.addEventListener('loadedmetadata', restoreSavedPosition)
     video.addEventListener('playing', onPlaying)
     video.addEventListener('waiting', scheduleStallRecovery)
     video.addEventListener('stalled', scheduleStallRecovery)
@@ -380,6 +389,7 @@ export default function VideoPlayer({
     video.addEventListener('progress', onTime)
     video.addEventListener('error', onError)
     return () => {
+      video.removeEventListener('loadedmetadata', restoreSavedPosition)
       video.removeEventListener('playing', onPlaying)
       video.removeEventListener('waiting', scheduleStallRecovery)
       video.removeEventListener('stalled', scheduleStallRecovery)
@@ -391,7 +401,7 @@ export default function VideoPlayer({
       video.removeEventListener('progress', onTime)
       video.removeEventListener('error', onError)
     }
-  }, [clearTimers, publishState, startAttempt])
+  }, [clearTimers, publishState, startAttempt, streamType, title])
 
 
   useEffect(() => {
