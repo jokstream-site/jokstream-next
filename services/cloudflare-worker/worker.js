@@ -264,17 +264,29 @@ async function probePlaylistStream(cfg, id) {
     headers: { "User-Agent": "okhttp/5.0.0-alpha.2", Accept: "*/*" },
     redirect: "follow", signal: AbortSignal.timeout(30000)
   });
-  if (!playlist.ok) return { ok: false, stage: "playlist", status: playlist.status };
-  const body = await playlist.text();
+  if (!playlist.ok) {
+    if (playlist.body) await playlist.body.cancel();
+    return { ok: false, stage: "playlist", status: playlist.status };
+  }
+  if (!playlist.body) return { ok: false, stage: "playlist", error: "empty_playlist_body" };
+
+  const reader = playlist.body.getReader();
+  const decoder = new TextDecoder();
+  const hosts = new Set();
+  const pathShapes = [];
+  const MAX_PLAYLIST_BYTES = 32 * 1024 * 1024;
+  const MAX_LINE_CHARS = 16 * 1024;
+  let bytesRead = 0;
+  let pending = "";
+  let entries = 0;
   let streamTarget = null;
   let matchedBy = null;
-  const hosts = new Set();
-  let entries = 0;
   let idMentions = 0;
-  const pathShapes = [];
-  for (const line of body.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+  let stoppedEarly = false;
+
+  const inspectLine = (line) => {
     const value = line.trim();
-    if (!value || value.startsWith("#")) continue;
+    if (!value || value.startsWith("#")) return;
     entries++;
     try {
       const candidate = new URL(value, cfg.origin);
@@ -282,7 +294,8 @@ async function probePlaylistStream(cfg, id) {
       const segments = candidate.pathname.split("/").filter(Boolean).map(part => {
         try { return decodeURIComponent(part); } catch { return part; }
       });
-      const segmentMatch = segments.find(part => new RegExp("^" + id + "(?:\\.(?:ts|m3u8|mp4))?$", "i").test(part));
+      const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const segmentMatch = segments.find(part => new RegExp("^" + escapedId + "(?:\\.(?:ts|m3u8|mp4))?$", "i").test(part));
       const queryMatch = [...candidate.searchParams.entries()].some(([key, val]) =>
         /^(?:stream_?id|id)$/i.test(key) && val === id);
       if (segmentMatch || queryMatch) {
@@ -295,15 +308,61 @@ async function probePlaylistStream(cfg, id) {
         pathShapes.push({
           host: candidate.hostname,
           pathSegments: segments.length,
-          finalSegmentPattern: segments.length ? (segments[segments.length - 1].replace(/\\d/g, "N").slice(-18)) : ""
+          finalSegmentPattern: segments.length ? segments[segments.length - 1].replace(/\\d/g, "N").slice(-18) : ""
         });
       }
     } catch {}
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      bytesRead += value.byteLength;
+      if (bytesRead > MAX_PLAYLIST_BYTES) {
+        await reader.cancel("playlist_scan_limit");
+        return {
+          ok: false, stage: "playlist_scan", error: "playlist_size_limit_exceeded",
+          bytesRead, entries, hosts: [...hosts].slice(0, 8)
+        };
+      }
+      pending += decoder.decode(value, { stream: true });
+      if (pending.length > MAX_LINE_CHARS && !pending.includes("\n")) {
+        pending = "";
+        continue;
+      }
+      let newline;
+      while ((newline = pending.indexOf("\n")) !== -1) {
+        const line = pending.slice(0, newline).replace(/\r$/, "");
+        pending = pending.slice(newline + 1);
+        inspectLine(line);
+        if (streamTarget) {
+          stoppedEarly = true;
+          await reader.cancel("playlist_match_found");
+          break;
+        }
+      }
+      if (streamTarget) break;
+      if (pending.length > MAX_LINE_CHARS) pending = "";
+    }
+    if (!streamTarget && pending) inspectLine(pending);
+  } catch (error) {
+    try { await reader.cancel(); } catch {}
+    return {
+      ok: false, stage: "playlist_scan",
+      error: error instanceof Error ? error.name : "playlist_read_failed",
+      bytesRead, entries, hosts: [...hosts].slice(0, 8)
+    };
+  } finally {
+    try { reader.releaseLock(); } catch {}
   }
+
   if (!streamTarget) return {
     ok: false, stage: "playlist_lookup", matched: false, entries,
-    idMentions, hosts: [...hosts].slice(0, 8), pathShapes
+    bytesRead, idMentions, hosts: [...hosts].slice(0, 8), pathShapes,
+    stoppedEarly
   };
+
   const headers = {
     "User-Agent": "okhttp/5.0.0-alpha.2", Accept: "*/*", "Accept-Encoding": "identity",
     Referer: cfg.origin + "/", Origin: cfg.origin
@@ -320,7 +379,10 @@ async function probePlaylistStream(cfg, id) {
       if (response.status < 300 || response.status >= 400) break;
       const location = response.headers.get("Location");
       redirectChain.push({ status: response.status, host: target.hostname });
-      if (!location || depth === 4) return { ok: false, stage: "playlist_redirect", status: response.status, streamHost: streamTarget.hostname, matchedBy, redirectChain };
+      if (!location || depth === 4) {
+        if (response.body) await response.body.cancel();
+        return { ok: false, stage: "playlist_redirect", status: response.status, streamHost: streamTarget.hostname, matchedBy, redirectChain };
+      }
       target = new URL(location, target);
     }
   } catch (error) {
@@ -330,7 +392,8 @@ async function probePlaylistStream(cfg, id) {
     ok: response.ok, stage: "playlist_stream", status: response.status,
     matchedBy, streamHost: streamTarget.hostname, finalHost: target.hostname,
     contentType: response.headers.get("Content-Type"),
-    contentLength: response.headers.get("Content-Length"), redirectChain
+    contentLength: response.headers.get("Content-Length"), redirectChain,
+    playlistScanBytes: bytesRead, playlistEntriesScanned: entries, playlistMatchStoppedEarly: stoppedEarly
   };
   if (response.body) await response.body.cancel();
   return result;
