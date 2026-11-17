@@ -31,14 +31,14 @@ function resolvePlayableUrl(input: string) {
   } catch {
     throw new Error('Invalid stream URL')
   }
-  const gatewayBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\\/$/, '') || window.location.origin
+  const gatewayBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || window.location.origin
   let gatewayOrigin: string
   try {
     gatewayOrigin = new URL(gatewayBase, window.location.href).origin
   } catch {
     throw new Error('Invalid Gateway configuration')
   }
-  if (parsed.protocol !== 'https:' || parsed.origin !== gatewayOrigin || !/^\\/api\\/stream\\/[A-Za-z0-9_-]+$/.test(parsed.pathname)) {
+  if (parsed.protocol !== 'https:' || parsed.origin !== gatewayOrigin || !/^\/api\/stream\/[A-Za-z0-9_-]+$/.test(parsed.pathname)) {
     throw new Error('Playback must use the secure Gateway stream route')
   }
   return parsed.href
