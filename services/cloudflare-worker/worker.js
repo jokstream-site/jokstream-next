@@ -388,14 +388,49 @@ async function probePlaylistStream(cfg, id) {
   } catch (error) {
     return { ok: false, stage: "playlist_fetch", error: error instanceof Error ? error.name : "fetch_failed", streamHost: streamTarget.hostname, matchedBy, redirectChain };
   }
+  const diagnosticHeaders = {};
+  for (const name of ["server", "cf-ray", "cf-cache-status", "content-type", "content-length", "retry-after", "via", "x-request-id", "x-cache"]) {
+    const value = response.headers.get(name);
+    if (value) diagnosticHeaders[name] = value.slice(0, 200);
+  }
   const result = {
     ok: response.ok, stage: "playlist_stream", status: response.status,
     matchedBy, streamHost: streamTarget.hostname, finalHost: target.hostname,
     contentType: response.headers.get("Content-Type"),
     contentLength: response.headers.get("Content-Length"), redirectChain,
-    playlistScanBytes: bytesRead, playlistEntriesScanned: entries, playlistMatchStoppedEarly: stoppedEarly
+    playlistScanBytes: bytesRead, playlistEntriesScanned: entries, playlistMatchStoppedEarly: stoppedEarly,
+    diagnosticHeaders
   };
-  if (response.body) await response.body.cancel();
+  if (response.body) {
+    if (!response.ok) {
+      const reader = response.body.getReader();
+      const chunks = [];
+      let total = 0;
+      try {
+        while (total < 1024) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const part = value.slice(0, 1024 - total);
+          chunks.push(part);
+          total += part.byteLength;
+          if (part.byteLength < value.byteLength) break;
+        }
+      } catch {}
+      try { await reader.cancel("diagnostic_preview_complete"); } catch {}
+      try { reader.releaseLock(); } catch {}
+      const previewBytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) { previewBytes.set(chunk, offset); offset += chunk.byteLength; }
+      let preview = new TextDecoder().decode(previewBytes).replace(/[\\u0000-\\u001f\\u007f]/g, " ").replace(/<[^>]{0,200}>/g, " ").replace(/\\s+/g, " ").trim();
+      preview = preview
+        .replace(/([?&](?:username|password|token|auth|key)=)[^&\\s]*/gi, "$1[redacted]")
+        .slice(0, 500);
+      if (preview) result.errorBodyPreview = preview;
+      result.errorBodyBytesRead = total;
+    } else {
+      await response.body.cancel();
+    }
+  }
   return result;
 }
 function firstHlsResource(manifest) {
