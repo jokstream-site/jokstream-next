@@ -697,7 +697,8 @@ app.get('/api/status', (_req, res) => res.json({
   adminConfigured: Boolean(env.ADMIN_API_TOKEN),
   redistributionAuthorized: env.UPSTREAM_REDISTRIBUTION_AUTHORIZED === 'true',
   catalogStorageConfigured: Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY && env.CATALOG_SYNC_SECRET),
-  mediaProxyConfigured: Boolean(process.env.MEDIAFLOW_BASE_URL && process.env.MEDIAFLOW_API_PASSWORD),
+  mediaProxyConfigured: false,
+  mediaProxyMode: 'disabled_worker_only',
   updatedAt: syncState.updatedAt
 }))
 
@@ -889,9 +890,8 @@ app.all('/api/stream/:token', async (req, res) => {
     playbackTokens.delete(String(req.params.token))
     return res.status(404).json({ error: 'playback_link_expired' })
   }
-  const mediaflowBase = env.MEDIAFLOW_BASE_URL
   const workerBase = env.XTREAM_API_BASE_URL ? new URL(env.XTREAM_API_BASE_URL).origin : ''
-  if (!mediaflowBase && !workerBase) return res.status(503).json({ error: 'cloudflare_proxy_not_configured' })
+  if (!workerBase) return res.status(503).json({ error: 'cloudflare_proxy_not_configured' })
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 90_000)
@@ -902,8 +902,10 @@ app.all('/api/stream/:token', async (req, res) => {
 
   try {
     const target = new URL(entry.url)
-    const allowedOrigins = new Set([workerBase, mediaflowBase ? new URL(mediaflowBase).origin : ''].filter(Boolean))
-    if (!allowedOrigins.has(target.origin)) return res.status(403).json({ error: 'invalid_playback_target' })
+    const allowedOrigins = new Set([workerBase])
+    if (!allowedOrigins.has(target.origin) || !/^\/(?:stream|hls)\//.test(target.pathname)) {
+      return res.status(403).json({ error: 'invalid_playback_target' })
+    }
 
     const headers: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 JokStream/1.0',
@@ -918,9 +920,13 @@ app.all('/api/stream/:token', async (req, res) => {
     const upstream = await fetch(target, {
       method: req.method,
       headers,
-      redirect: 'follow',
+      redirect: 'manual',
       signal: controller.signal
     })
+    if (upstream.status >= 300 && upstream.status < 400) {
+      console.warn('[stream-redirect-rejected]', { status: upstream.status, url: safeUrlForLog(target.toString()) })
+      return res.status(502).json({ error: 'worker_redirect_rejected' })
+    }
     res.status(upstream.status)
     if (!upstream.ok) {
       let upstreamError = 'upstream_error'
@@ -959,10 +965,11 @@ app.all('/api/stream/:token', async (req, res) => {
 
     if (isManifest && upstream.ok) {
       const manifest = await upstream.text()
-      const allowedOrigins = new Set([workerBase, mediaflowBase ? new URL(mediaflowBase).origin : ''].filter(Boolean))
       const toGatewayUrl = (raw: string) => {
         const resolved = new URL(raw, finalUrl)
-        if (!allowedOrigins.has(resolved.origin)) return raw
+        if (resolved.origin !== workerBase || !/^\/(?:stream|hls)\//.test(resolved.pathname)) {
+          throw new Error('manifest_resource_not_worker_proxy')
+        }
         return '/api/stream/' + createPlaybackToken(resolved.toString())
       }
       const rewritten = manifest.split(/\r?\n/).map(line => {
@@ -992,39 +999,6 @@ app.all('/api/stream/:token', async (req, res) => {
     res.off('close', abortOnDisconnect)
   }
 })
-
-async function generateMediaFlowUrl(
-  proxyBase: string,
-  endpoint: string,
-  destinationUrl: string,
-  providerOrigin: string
-) {
-  const response = await fetch(proxyBase + '/generate_url', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      mediaflow_proxy_url: proxyBase,
-      endpoint,
-      destination_url: destinationUrl,
-      query_params: {},
-      request_headers: {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
-        Accept: '*/*',
-        Referer: providerOrigin + '/',
-        Origin: providerOrigin
-      },
-      api_password: env.MEDIAFLOW_API_PASSWORD,
-      expiration: 1800
-    }),
-    signal: AbortSignal.timeout(20_000)
-  })
-  if (!response.ok) throw new Error('mediaflow_url_generation_failed')
-  const result = await response.json() as { url?: string }
-  if (!result.url) throw new Error('mediaflow_url_missing')
-  const generated = new URL(result.url)
-  if (generated.origin !== new URL(proxyBase).origin) throw new Error('mediaflow_generated_external_url')
-  return generated.toString()
-}
 
 app.post('/api/playback', async (req, res) => {
   const input = z.object({
@@ -1082,17 +1056,11 @@ app.post('/api/playback', async (req, res) => {
     const upstreamUrl = upstream.toString()
     const isLive = kind === 'live'
     const isVodHls = !isLive && extension === 'm3u8'
-    const transcodeHls = !isLive && ['mkv', 'avi', 'ts'].includes(extension)
-    let primaryTarget = upstreamUrl
-    if (transcodeHls) {
-      stage = 'mediaflow_url'
-      if (!env.MEDIAFLOW_BASE_URL || !env.MEDIAFLOW_API_PASSWORD) return res.status(503).json({ error: 'media_proxy_not_configured_for_transcode' })
-      const proxyBase = env.MEDIAFLOW_BASE_URL.replace(/\/$/, '')
-      primaryTarget = await generateMediaFlowUrl(proxyBase, '/proxy/transcode/playlist.m3u8', upstreamUrl, workerOrigin)
-    }
-    const primaryToken = createPlaybackToken(primaryTarget)
+    // All playback source requests are served by Cloudflare Worker. MediaFlow is
+    // intentionally excluded until a worker-only transcoding path is verified.
+    const primaryToken = createPlaybackToken(upstreamUrl)
     const publicUrl = new URL('/api/stream/' + primaryToken, req.protocol + '://' + req.get('host'))
-    publicUrl.searchParams.set('format', isLive || isVodHls || transcodeHls ? 'hls' : 'file')
+    publicUrl.searchParams.set('format', isLive || isVodHls ? 'hls' : 'file')
 
     let fallbackUrl: string | undefined
     if (isLive) {
@@ -1112,7 +1080,7 @@ app.post('/api/playback', async (req, res) => {
       expiresIn: 1800,
       kind,
       extension,
-      playbackType: isLive || isVodHls || transcodeHls ? 'hls' : 'file',
+      playbackType: isLive || isVodHls ? 'hls' : 'file',
       fallbackPlaybackType: isLive ? 'mpegts' : undefined
     })
   } catch (error) {
